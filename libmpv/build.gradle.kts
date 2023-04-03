@@ -1,10 +1,10 @@
-@Suppress("DSL_SCOPE_VIOLATION") // False positive
+@Suppress("DSL_SCOPE_VIOLATION")
 plugins {
     alias(libs.plugins.android.library)
 }
 
 android {
-    namespace = "dev.jdtech.mpv"
+    namespace = "com.alexmercerind.mpv"
     compileSdk = 33
     buildToolsVersion = "33.0.1"
     ndkVersion = "25.1.8937393"
@@ -35,7 +35,7 @@ dependencies {
 }
 
 extra.apply {
-    set("PUBLISH_GROUP_ID", "dev.jdtech.mpv")
+    set("PUBLISH_GROUP_ID", "com.alexmercerind.mpv")
     set("PUBLISH_ARTIFACT_ID", "libmpv")
     set("PUBLISH_VERSION", "0.1.1")
 }

@@ -1,14 +1,12 @@
-package dev.jdtech.mpv;
+package com.alexmercerind.mpv;
 
-// Wrapper for native library
-
+import java.util.List;
+import java.util.ArrayList;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.util.ArrayList;
-import java.util.List;
 
-import android.content.Context;
 import android.view.Surface;
+import android.content.Context;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;

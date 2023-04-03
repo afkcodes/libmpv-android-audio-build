@@ -37,7 +37,7 @@ void init_methods_cache(JNIEnv *env) {
     java_Boolean_init = env->GetMethodID(java_Boolean, "<init>", "(Z)V");
     java_Boolean_booleanValue = env->GetMethodID(java_Boolean, "booleanValue", "()Z");
 
-    mpv_MPVLib = FIND_CLASS("dev/jdtech/mpv/MPVLib");
+    mpv_MPVLib = FIND_CLASS("com/alexmercerind/mpv/MPVLib");
     mpv_MPVLib_eventProperty_S  = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;)V"); // eventProperty(String)
     mpv_MPVLib_eventProperty_Sb = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;Z)V"); // eventProperty(String, boolean)
     mpv_MPVLib_eventProperty_Sl = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;J)V"); // eventProperty(String, long)

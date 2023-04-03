@@ -16,8 +16,9 @@ fi
 
 PKG_CONFIG="pkg-config --static" \
 ./waf configure \
-    --disable-cplayer \
-    --disable-vulkan \
+	--enable-lgpl \
+	--disable-cplayer \
+	--disable-vulkan \
 	--disable-iconv --lua=52 \
 	--enable-libmpv-shared \
 	--disable-manpage-build \
