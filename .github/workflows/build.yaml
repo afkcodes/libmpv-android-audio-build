@@ -1,9 +1,10 @@
 name: Build libmpv-android
 
-on: 
+on:
   push:
     branches:
-      - main
+      - video
+      - audio
   pull_request:
 
 env:

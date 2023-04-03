@@ -5,7 +5,8 @@ on:
     tags:
       - v*
     branches:
-      - master
+      - video
+      - audio
 
 jobs:
   publish:
