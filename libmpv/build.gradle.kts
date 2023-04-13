@@ -15,7 +15,7 @@ android {
         consumerProguardFiles("proguard-rules.pro")
         externalNativeBuild {
             cmake {
-                arguments += "-DANDROID_STL=c++_shared -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--hash-style=both"
+                arguments += "-DANDROID_STL=c++_shared"
                 cFlags += "-Werror"
                 cppFlags += "-std=c++11"
             }
