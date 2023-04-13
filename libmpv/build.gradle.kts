@@ -10,12 +10,12 @@ android {
     ndkVersion = "25.1.8937393"
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 21
         targetSdk = 33
         consumerProguardFiles("proguard-rules.pro")
         externalNativeBuild {
             cmake {
-                arguments += "-DANDROID_STL=c++_shared"
+                arguments += "-DANDROID_STL=c++_shared -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--hash-style=both"
                 cFlags += "-Werror"
                 cppFlags += "-std=c++11"
             }
