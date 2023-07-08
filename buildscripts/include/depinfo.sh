@@ -24,5 +24,3 @@ dep_lua=()
 dep_shaderc=()
 dep_libplacebo=(shaderc)
 dep_mpv=(ffmpeg lua libplacebo)
-dep_mpv_android=(mpv)
-

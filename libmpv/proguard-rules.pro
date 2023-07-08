@@ -1,1 +1,0 @@
--keep class com.alexmercerind.mpv.MPVLib { *; }

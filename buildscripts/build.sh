@@ -5,7 +5,7 @@ cd "$( dirname "${BASH_SOURCE[0]}" )"
 
 cleanbuild=0
 nodeps=0
-target=mpv-android
+target=mpv
 archs=(armv7l arm64 x86 x86_64)
 
 getdeps () {
@@ -88,7 +88,7 @@ CROSSFILE
 }
 
 build () {
-	if [ $1 != "mpv-android" ] && [ ! -d deps/$1 ]; then
+	if [ ! -d deps/$1 ]; then
 		printf >&2 '\e[1;31m%s\e[m\n' "Target $1 not found"
 		return 1
 	fi
@@ -100,23 +100,13 @@ build () {
 			build $dep
 		done
 	fi
-	if [ "$1" != "mpv-android" ]; then
-	  printf >&2 '\e[1;34m%s\e[m\n' "Building $1..."
-		pushd deps/$1
-		BUILDSCRIPT=../../scripts/$1.sh
-		[ $cleanbuild -eq 1 ] && $BUILDSCRIPT clean
+
+	printf >&2 '\e[1;34m%s\e[m\n' "Building $1..."
+	pushd deps/$1
+	BUILDSCRIPT=../../scripts/$1.sh
+	[ $cleanbuild -eq 1 ] && $BUILDSCRIPT clean
     $BUILDSCRIPT build
     popd
-	fi
-}
-
-assemble () {
-  printf >&2 '\e[1;34m%s\e[m\n' "Assembling $1..."
-  pushd ..
-  BUILDSCRIPT=buildscripts/scripts/mpv-android.sh
-  [ $cleanbuild -eq 1 ] && $BUILDSCRIPT clean
-  $BUILDSCRIPT build
-  popd
 }
 
 usage () {
@@ -161,12 +151,6 @@ else
   loadarch $arch
   setup_prefix
   build $target
-fi
-
-if [ "$target" == "mpv-android" ]; then
-  assemble
-	[ -d ../libmpv/build/outputs/aar ] && ls -lh ../libmpv/build/outputs/aar/*.aar
-	[ -d ../libmpv/build/libs ] && ls -lh ../libmpv/build/libs/*.jar
 fi
 
 exit 0
