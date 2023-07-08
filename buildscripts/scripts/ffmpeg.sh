@@ -27,8 +27,143 @@ cpuflags=
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --cc=$CC \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config \
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib" \
-	--enable-{jni,mediacodec,mbedtls,libdav1d,version3,shared,small,optimizations} \
-	--disable-{static,vulkan,muxers,encoders,devices,filters,stripping,doc,programs} \
+	\
+	--disable-gpl \
+	--disable-nonfree \
+	--disable-static \
+	--disable-vulkan \
+	\
+	--disable-muxers \
+	--disable-decoders \
+	--disable-encoders \
+	--disable-demuxers \
+	--disable-parsers \
+	--disable-protocols \
+	--disable-devices \
+	--disable-filters \
+	\
+	--disable-stripping \
+	\
+	--disable-doc \
+	--disable-programs \
+	--disable-gray \
+	--disable-swscale-alpha \
+	--disable-avdevice \
+	--disable-postproc \
+	--disable-dxva2 \
+	--disable-vaapi \
+	--disable-vdpau \
+	--disable-videotoolbox \
+	--disable-audiotoolbox \
+	--disable-iconv \
+	--disable-linux-perf \
+	--disable-bzlib \
+	--disable-bsf=mjpeg2jpeg \
+	--disable-bsf=mjpega_dump_header \
+	--disable-bsf=mov2textsub \
+	--disable-bsf=text2movsub \
+	--disable-bsf=eac3_core \
+	\
+	--enable-jni \
+	--enable-version3 \
+	\
+	--enable-mediacodec \
+	\
+	--enable-mbedtls \
+	--enable-libdav1d \
+	\
+	--enable-shared \
+	--enable-small \
+	--enable-optimizations \
+	--enable-bsfs \
+	--enable-runtime-cpudetect \
+	\
+	--enable-avcodec \
+	--enable-avformat \
+	--enable-avutil \
+	--enable-avfilter \
+	\
+	--enable-swresample \
+	--enable-swscale \
+	\
+	--enable-network \
+	\
+	--enable-decoder=aac \
+	--enable-decoder=aac_latm \
+	--enable-decoder=flv \
+	--enable-decoder=flv \
+	--enable-decoder=h263 \
+	--enable-decoder=h263i \
+	--enable-decoder=h263p \
+	--enable-decoder=h264 \
+	--enable-decoder=mp3* \
+	--enable-decoder=mpeg1video \
+	--enable-decoder=mpeg2video \
+	--enable-decoder=mpeg4 \
+	--enable-decoder=vp6 \
+	--enable-decoder=vp6a \
+	--enable-decoder=vp6f \
+	--enable-decoder=flac \
+	--enable-decoder=alac \
+	--enable-decoder=pcm_* \
+	--enable-decoder=opus \
+	--enable-decoder=vorbis \
+	--enable-decoder=hevc \
+	--enable-decoder=vp8 \
+	--enable-decoder=vp9 \
+	--enable-decoder=libdav1d \
+	\
+	--enable-encoder=png \
+	--enable-encoder=mjpeg \
+	\
+	--enable-muxer=mpegts \
+	--enable-muxer=mp4 \
+	\
+	--enable-demuxer=aac \
+	--enable-demuxer=concat \
+	--enable-demuxer=data \
+	--enable-demuxer=flv \
+	--enable-demuxer=hls \
+	--enable-demuxer=latm \
+	--enable-demuxer=live_flv \
+	--enable-demuxer=loas \
+	--enable-demuxer=m4v \
+	--enable-demuxer=mov \
+	--enable-demuxer=mp3 \
+	--enable-demuxer=mpegps \
+	--enable-demuxer=mpegts \
+	--enable-demuxer=mpegvideo \
+	--enable-demuxer=flac \
+	--enable-demuxer=hevc \
+	--enable-demuxer=webm_dash_manifest \
+	--enable-demuxer=rtsp \
+	--enable-demuxer=mpeg4 \
+	--enable-demuxer=mjpeg \
+	--enable-demuxer=avi \
+	--enable-demuxer=av1 \
+	\
+	--enable-parser=aac \
+	--enable-parser=aac_latm \
+	--enable-parser=h263 \
+	--enable-parser=h264 \
+	--enable-parser=flac \
+	--enable-parser=hevc \
+	--enable-parser=mpeg4 \
+	--enable-parser=mpeg4video \
+	--enable-parser=mpegvideo \
+	\
+	--enable-filter=equalizer \
+	\
+	--enable-protocol=async \
+	--enable-protocol=ffrtmphttp \
+	--enable-protocol=rtmp \
+	--enable-protocol=rtmpt \
+	--enable-protocol=rtsp \
+	--enable-protocol=rtmp* \
+	--enable-protocol=rtp \
+	--enable-protocol=udp \
+	--enable-protocol=tcp \
+	--enable-protocol=pipe \
 
 make -j$cores
 make DESTDIR="$prefix_dir" install
