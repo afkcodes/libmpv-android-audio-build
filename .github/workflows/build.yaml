@@ -3,7 +3,7 @@ name: Build libmpv-android
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 env:

@@ -72,46 +72,47 @@ cpuflags=
 	--enable-mbedtls \
 	--enable-libdav1d \
 	\
-	--enable-shared \
-	--enable-small \
-	--enable-optimizations \
 	--enable-bsfs \
+	--enable-small \
+	--enable-shared \
+	--enable-optimizations \
 	--enable-runtime-cpudetect \
 	\
-	--enable-avcodec \
-	--enable-avformat \
 	--enable-avutil \
+	--enable-avcodec \
 	--enable-avfilter \
+	--enable-avformat \
 	\
-	--enable-swresample \
 	--enable-swscale \
+	--enable-swresample \
 	\
 	--enable-network \
 	\
-	--enable-decoder=aac \
-	--enable-decoder=aac_latm \
 	--enable-decoder=flv \
 	--enable-decoder=flv \
 	--enable-decoder=h263 \
 	--enable-decoder=h263i \
 	--enable-decoder=h263p \
 	--enable-decoder=h264 \
-	--enable-decoder=mp3* \
 	--enable-decoder=mpeg1video \
 	--enable-decoder=mpeg2video \
 	--enable-decoder=mpeg4 \
 	--enable-decoder=vp6 \
 	--enable-decoder=vp6a \
 	--enable-decoder=vp6f \
+	--enable-decoder=vp8 \
+	--enable-decoder=vp9 \
+	--enable-decoder=hevc \
+	--enable-decoder=libdav1d \
+    \
+	--enable-decoder=aac \
+	--enable-decoder=aac_latm \
+	--enable-decoder=mp3* \
 	--enable-decoder=flac \
 	--enable-decoder=alac \
 	--enable-decoder=pcm_* \
 	--enable-decoder=opus \
 	--enable-decoder=vorbis \
-	--enable-decoder=hevc \
-	--enable-decoder=vp8 \
-	--enable-decoder=vp9 \
-	--enable-decoder=libdav1d \
 	\
 	--enable-encoder=png \
 	--enable-encoder=mjpeg \
