@@ -142,6 +142,9 @@ cpuflags=
 	--enable-demuxer=mjpeg \
 	--enable-demuxer=avi \
 	--enable-demuxer=av1 \
+	--enable-demuxer=matroska \
+	--enable-demuxer=dash \
+	--enable_demuxer=webm_dash_manifest \
 	\
 	--enable-parser=aac \
 	--enable-parser=aac_latm \
