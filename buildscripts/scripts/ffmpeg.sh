@@ -144,6 +144,9 @@ cpuflags=
 	--enable-demuxer=matroska \
 	--enable-demuxer=dash \
 	--enable-demuxer=webm_dash_manifest \
+ 	--enable-demuxer=flac \
+  	--enable-demuxer=wav \
+  	--enable-demuxer=ogg \
 	\
 	--enable-parser=aac \
 	--enable-parser=aac_latm \
