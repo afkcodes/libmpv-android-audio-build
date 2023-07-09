@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: write
+
 env:
   NDK_VER: 25.1.8937393
 
