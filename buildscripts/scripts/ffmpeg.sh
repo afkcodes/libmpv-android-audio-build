@@ -75,6 +75,7 @@ cpuflags=
 	--enable-bsfs \
 	--enable-small \
 	--enable-shared \
+	--enable-hwaccels \
 	--enable-optimizations \
 	--enable-runtime-cpudetect \
 	\
@@ -104,7 +105,7 @@ cpuflags=
 	--enable-decoder=vp9 \
 	--enable-decoder=hevc \
 	--enable-decoder=libdav1d \
-    \
+	\
 	--enable-decoder=aac \
 	--enable-decoder=aac_latm \
 	--enable-decoder=mp3* \
