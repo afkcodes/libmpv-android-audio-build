@@ -21,6 +21,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 11
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v1
+        with:
+          channel: "stable"
       - name: Gradle Build Action
         uses: gradle/gradle-build-action@v2.3.3
       - name: Cache
@@ -42,7 +46,18 @@ jobs:
       - name: Build
         working-directory: ./buildscripts
         run: ./build.sh
+      - name: Bundle
+        working-directory: ./buildscripts
+        run: ./bundle.sh
       - uses: actions/upload-artifact@v3.1.2
         with:
-          name: libmpv-release.aar
-          path: ./libmpv/build/outputs/aar/libmpv-release.aar
+          name: artifact
+          path: ./output/*
+      - uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main'
+        with:
+          draft: true
+          prerelease: false
+          tag_name: "vnext"
+          files: |
+            output/*
