@@ -39,10 +39,10 @@ cd ../build/app/outputs/apk/release/
 rm -r lib/*/libapp.so
 rm -r lib/*/libflutter.so
 
-zip -r video-arm64-v8a.jar      lib/arm64-v8a
-zip -r video-armeabi-v7a.jar    lib/armeabi-v7a
-zip -r video-x86.jar            lib/x86
-zip -r video-x86_64.jar         lib/x86_64
+zip -r "arm64-v8a.jar"                lib/arm64-v8a
+zip -r "armeabi-v7a.jar"              lib/armeabi-v7a
+zip -r "x86.jar"                      lib/x86
+zip -r "x86_64.jar"                   lib/x86_64
 
 rm -r lib/*/libavcodec.so
 rm -r lib/*/libavdevice.so
@@ -52,10 +52,10 @@ rm -r lib/*/libavutil.so
 rm -r lib/*/libswresample.so
 rm -r lib/*/libswscale.so
 
-zip -r video-arm64-v8a.jar      lib/arm64-v8a
-zip -r video-armeabi-v7a.jar    lib/armeabi-v7a
-zip -r video-x86.jar            lib/x86
-zip -r video-x86_64.jar         lib/x86_64
+zip -r "arm64-v8a(no-ffmpeg).jar"      lib/arm64-v8a
+zip -r "armeabi-v7a(no-ffmpeg).jar"    lib/armeabi-v7a
+zip -r "x86(no-ffmpeg).jar"            lib/x86
+zip -r "x86_64(no-ffmpeg).jar"         lib/x86_64
 
 mkdir ../../../../../../../../../output
 
