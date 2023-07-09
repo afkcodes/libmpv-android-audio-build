@@ -147,6 +147,27 @@ cpuflags=
  	--enable-demuxer=flac \
   	--enable-demuxer=wav \
   	--enable-demuxer=ogg \
+   	\
+    	--enable-demuxer=ass \
+     	--enable-demuxer=srt \
+      	--enable-demuxer=stl \
+      	--enable-demuxer=webvtt \
+	--enable-demuxer=subviewer \
+ 	--enable-demuxer=subviewer1 \
+  	--enable-demuxer=vplayer \
+        \
+   	--enable-decoder=ssa \
+     	--enable-decoder=ass \
+      	--enable-decoder=dvbsub \
+	--enable-decoder=dvdsub \
+ 	--enable-decoder=srt \
+  	--enable-decoder=stl \
+	--enable-decoder=subrip \
+	--enable-decoder=subviewer \
+ 	--enable-decoder=subviewer1 \
+  	--enable-decoder=text \
+   	--enable-decoder=vplayer \
+    	--enable-decoder=webvtt \
 	\
 	--enable-parser=aac \
 	--enable-parser=aac_latm \
