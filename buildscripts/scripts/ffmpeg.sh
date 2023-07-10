@@ -116,9 +116,6 @@ cpuflags=
 	--enable-decoder=opus \
 	--enable-decoder=vorbis \
 	\
-	--enable-encoder=png \
-	--enable-encoder=mjpeg \
-	\
 	--enable-muxer=mpegts \
 	--enable-muxer=mp4 \
 	\
