@@ -58,11 +58,8 @@ cpuflags=
 	--disable-iconv \
 	--disable-linux-perf \
 	--disable-bzlib \
-	--disable-bsf=mjpeg2jpeg \
-	--disable-bsf=mjpega_dump_header \
-	--disable-bsf=mov2textsub \
-	--disable-bsf=text2movsub \
-	--disable-bsf=eac3_core \
+	\
+	--disable-bsfs \
 	\
 	--enable-jni \
 	--enable-version3 \
@@ -72,7 +69,6 @@ cpuflags=
 	--enable-mbedtls \
 	--enable-libdav1d \
 	\
-	--enable-bsfs \
 	--enable-small \
 	--enable-shared \
 	--enable-hwaccels \
