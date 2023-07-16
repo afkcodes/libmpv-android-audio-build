@@ -30,9 +30,11 @@ cpuflags=
 	\
 	--disable-gpl \
 	--disable-nonfree \
+	--enable-version3 \
 	--disable-static \
 	--disable-vulkan \
-	\
+	--disable-iconv \
+	`# Disable everything`\ \
 	--disable-muxers \
 	--disable-decoders \
 	--disable-encoders \
@@ -41,50 +43,43 @@ cpuflags=
 	--disable-protocols \
 	--disable-devices \
 	--disable-filters \
-	\
-	--disable-stripping \
-	\
 	--disable-doc \
+	--disable-avdevice \
+	--disable-postproc \
 	--disable-programs \
 	--disable-gray \
 	--disable-swscale-alpha \
-	--disable-avdevice \
-	--disable-postproc \
+	`# Android specific options`\ \
+	--enable-jni \
+	--disable-bsfs `# Only required for video support`\ \
+	--disable-stripping `# Disable stripping to have debug symbols`\ \
+	--disable-mediacodec `# Only required for video support`\ \
+	`# Disable options relevant for other platforms`\ \
 	--disable-dxva2 \
 	--disable-vaapi \
 	--disable-vdpau \
+	--disable-bzlib \
+	--disable-linux-perf \
 	--disable-videotoolbox \
 	--disable-audiotoolbox \
-	--disable-iconv \
-	--disable-linux-perf \
-	--disable-bzlib \
-	\
-	--disable-bsfs \
-	\
-	--enable-jni \
-	--enable-version3 \
-	\
-	--enable-mediacodec \
-	\
-	--enable-mbedtls \
-	--enable-libdav1d \
-	\
+	`# Optimizations`\ \
 	--enable-small \
 	--enable-shared \
 	--enable-hwaccels \
 	--enable-optimizations \
 	--enable-runtime-cpudetect \
-	\
+	`# HTTP support`\ \
+	--enable-mbedtls \
+	`# dav1d`\ \
+	--enable-libdav1d \
+	`# Enable selected components`\ \
 	--enable-avutil \
 	--enable-avcodec \
 	--enable-avfilter \
 	--enable-avformat \
-	\
 	--enable-swscale \
 	--enable-swresample \
-	\
-	--enable-network \
-	\
+	`# Enable decoders`\ \
 	--enable-decoder=aac* \
 	--enable-decoder=ac3 \
 	--enable-decoder=alac \
@@ -109,7 +104,7 @@ cpuflags=
 	--enable-decoder=wma* \
 	--enable-decoder=pcm* \
 	--enable-decoder=dsd* \
-	\
+	`# Enable demuxers`\ \
 	--enable-demuxer=aac \
 	--enable-demuxer=ac3 \
 	--enable-demuxer=aiff \
@@ -136,7 +131,7 @@ cpuflags=
 	--enable-demuxer=dsf \
 	--enable-demuxer=dts \
 	--enable-demuxer=truehd \
-	\
+	`# Enable parsers`\ \
 	--enable-parser=aac* \
 	--enable-parser=ac3 \
 	--enable-parser=cook \
@@ -146,10 +141,10 @@ cpuflags=
 	--enable-parser=mpegaudio \
 	--enable-parser=tak \
 	--enable-parser=vorbis \
-	\
+	`# Enable filters`\ \
 	--enable-filter=overlay \
 	--enable-filter=equalizer \
-	\
+	`# Enable protocols`\ \
 	--enable-protocol=async \
 	--enable-protocol=cache \
 	--enable-protocol=data \
@@ -170,6 +165,8 @@ cpuflags=
 	--enable-protocol=tcp \
 	--enable-protocol=tls \
 	--enable-protocol=srt \
+	`# Enable network support`\ \
+	--enable-network \
 
 make -j$cores
 make DESTDIR="$prefix_dir" install
