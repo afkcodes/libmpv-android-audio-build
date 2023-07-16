@@ -105,6 +105,17 @@ cpuflags=
 	--enable-decoder=pcm* \
 	--enable-decoder=dsd* \
 	\
+	--enable-decoder=mjpeg \
+	--enable-decoder=ljpeg \
+	--enable-decoder=jpegls \
+	--enable-decoder=jpeg2000 \
+	--enable-decoder=png \
+	--enable-decoder=gif \
+	--enable-decoder=bmp \
+	--enable-decoder=tiff \
+	--enable-decoder=webp \
+	--enable-decoder=jpegls \
+	\
 	--enable-demuxer=aac \
 	--enable-demuxer=ac3 \
 	--enable-demuxer=aiff \
