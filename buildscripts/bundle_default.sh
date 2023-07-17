@@ -1,5 +1,14 @@
 # --------------------------------------------------
 
+rm scripts/ffmpeg.sh
+cp variants/default.sh scripts/ffmpeg.sh
+
+# --------------------------------------------------
+
+./build.sh
+
+# --------------------------------------------------
+
 cd deps/media-kit-android-helper
 
 sudo chmod +x gradlew
@@ -20,7 +29,9 @@ cd deps/media_kit/media_kit_native_event_loop
 
 flutter create --org com.alexmercerind --template plugin_ffi --platforms=android .
 
-printf "      android:\n        ffiPlugin: true\n" >> pubspec.yaml
+if ! grep -q android "pubspec.yaml"; then
+  printf "      android:\n        ffiPlugin: true\n" >> pubspec.yaml
+fi
 
 flutter pub get
 
@@ -53,10 +64,10 @@ rm -r lib/*/libavutil.so
 rm -r lib/*/libswresample.so
 rm -r lib/*/libswscale.so
 
-zip -r "no-ffmpeg-arm64-v8a.jar"      lib/arm64-v8a
-zip -r "no-ffmpeg-armeabi-v7a.jar"    lib/armeabi-v7a
-zip -r "no-ffmpeg-x86.jar"            lib/x86
-zip -r "no-ffmpeg-x86_64.jar"         lib/x86_64
+zip -r "default-no-ffmpeg-arm64-v8a.jar"      lib/arm64-v8a
+zip -r "default-no-ffmpeg-armeabi-v7a.jar"    lib/armeabi-v7a
+zip -r "default-no-ffmpeg-x86.jar"            lib/x86
+zip -r "default-no-ffmpeg-x86_64.jar"         lib/x86_64
 
 mkdir ../../../../../../../../../../output
 
@@ -68,5 +79,5 @@ cd ../../../../../../../../..
 
 # --------------------------------------------------
 
-zip -r debug-symbols.zip prefix/*/lib
-cp debug-symbols.zip ../output
+zip -r default-debug-symbols.zip prefix/*/lib
+cp default-debug-symbols.zip ../output

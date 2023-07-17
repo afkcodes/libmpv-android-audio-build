@@ -46,12 +46,12 @@ jobs:
       - name: Apply patches
         working-directory: ./buildscripts
         run: ./patch.sh
-      - name: Build
+      - name: Bundle (default)
         working-directory: ./buildscripts
-        run: ./build.sh
-      - name: Bundle
+        run: ./bundle_default.sh
+      - name: Bundle (full)
         working-directory: ./buildscripts
-        run: ./bundle.sh
+        run: ./bundle_full.sh
       - uses: actions/upload-artifact@v3.1.2
         with:
           name: artifact
