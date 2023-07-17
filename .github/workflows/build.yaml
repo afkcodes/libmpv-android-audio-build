@@ -48,10 +48,14 @@ jobs:
         run: ./patch.sh
       - name: Bundle (default)
         working-directory: ./buildscripts
-        run: ./bundle_default.sh
+        run: |
+          sudo chmod +x bundle_default.sh
+          ./bundle_default.sh
       - name: Bundle (full)
         working-directory: ./buildscripts
-        run: ./bundle_full.sh
+        run: |
+          sudo chmod +x bundle_full.sh
+          ./bundle_full.sh
       - uses: actions/upload-artifact@v3.1.2
         with:
           name: artifact
