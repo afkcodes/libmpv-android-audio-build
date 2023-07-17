@@ -64,10 +64,10 @@ rm -r lib/*/libavutil.so
 rm -r lib/*/libswresample.so
 rm -r lib/*/libswscale.so
 
-zip -r "default-no-ffmpeg-arm64-v8a.jar"      lib/arm64-v8a
-zip -r "default-no-ffmpeg-armeabi-v7a.jar"    lib/armeabi-v7a
-zip -r "default-no-ffmpeg-x86.jar"            lib/x86
-zip -r "default-no-ffmpeg-x86_64.jar"         lib/x86_64
+zip -r "no-ffmpeg-default-arm64-v8a.jar"      lib/arm64-v8a
+zip -r "no-ffmpeg-default-armeabi-v7a.jar"    lib/armeabi-v7a
+zip -r "no-ffmpeg-default-x86.jar"            lib/x86
+zip -r "no-ffmpeg-default-x86_64.jar"         lib/x86_64
 
 mkdir ../../../../../../../../../../output
 
@@ -79,5 +79,5 @@ cd ../../../../../../../../..
 
 # --------------------------------------------------
 
-zip -r default-debug-symbols.zip prefix/*/lib
-cp default-debug-symbols.zip ../output
+zip -r debug-symbols-default.zip prefix/*/lib
+cp debug-symbols-default.zip ../output
