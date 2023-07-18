@@ -138,33 +138,37 @@ index 44f5aef..cc58e4a 100644
 +ANativeWindow *vo_android_native_window(struct vo *vo) { return NULL; }
 +bool vo_android_surface_size(struct vo *vo, int *w, int *h) {}
 diff --git a/video/out/opengl/ra_gl.h b/video/out/opengl/ra_gl.h
-index 9844977..d3a7328 100644
+index 9844977..eb73696 100644
 --- a/video/out/opengl/ra_gl.h
 +++ b/video/out/opengl/ra_gl.h
-@@ -3,15 +3,14 @@
+@@ -3,15 +3,15 @@
  #include "common.h"
  #include "utils.h"
  
 -struct ra *ra_create_gl(GL *gl, struct mp_log *log);
-+struct ra *ra_create_gl(GL *gl, struct mp_log *log) { return NULL; }
- struct ra_tex *ra_create_wrapped_tex(struct ra *ra,
-                                      const struct ra_tex_params *params,
+-struct ra_tex *ra_create_wrapped_tex(struct ra *ra,
+-                                     const struct ra_tex_params *params,
 -                                     GLuint gl_texture);
 -struct ra_tex *ra_create_wrapped_fb(struct ra *ra, GLuint gl_fbo, int w, int h);
 -GL *ra_gl_get(struct ra *ra);
 -void ra_gl_set_debug(struct ra *ra, bool enable);
-+                                     GLuint gl_texture) { return NULL; }
-+struct ra_tex *ra_create_wrapped_fb(struct ra *ra, GLuint gl_fbo, int w, int h) { return NULL; }
-+GL *ra_gl_get(struct ra *ra) { return NULL; }
-+void ra_gl_set_debug(struct ra *ra, bool enable) {}
- void ra_gl_get_format(const struct ra_format *fmt, GLint *out_internal_format,
+-void ra_gl_get_format(const struct ra_format *fmt, GLint *out_internal_format,
 -                      GLenum *out_format, GLenum *out_type);
 -void ra_gl_get_raw_tex(struct ra *ra, struct ra_tex *tex,
 -                       GLuint *out_texture, GLenum *out_target);
 -bool ra_is_gl(struct ra *ra);
-+                      GLenum *out_format, GLenum *out_type) {}
-+void ra_gl_get_raw_tex(struct ra *ra, struct ra_tex *tex GLuint *out_texture, GLenum *out_target) {}
-+bool ra_is_gl(struct ra *ra) { return false; }
++static struct ra *ra_create_gl(GL *gl, struct mp_log *log) { return NULL; }
++static struct ra_tex *ra_create_wrapped_tex(struct ra *ra,
++                                            const struct ra_tex_params *params,
++                                            GLuint gl_texture) { return NULL; }
++static struct ra_tex *ra_create_wrapped_fb(struct ra *ra, GLuint gl_fbo, int w, int h) { return NULL; }
++static GL *ra_gl_get(struct ra *ra) { return NULL; }
++static void ra_gl_set_debug(struct ra *ra, bool enable) {}
++static void ra_gl_get_format(const struct ra_format *fmt, GLint *out_internal_format,
++                             GLenum *out_format, GLenum *out_type) {}
++
++static void ra_gl_get_raw_tex(struct ra *ra, struct ra_tex *tex GLuint *out_texture, GLenum *out_target) {}
++static bool ra_is_gl(struct ra *ra) { return false; }
 diff --git a/wscript_build.py b/wscript_build.py
 index 16c8cf0..4c2f1dd 100644
 --- a/wscript_build.py
