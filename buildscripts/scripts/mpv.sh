@@ -20,6 +20,7 @@ PKG_CONFIG="pkg-config --static" \
 	--enable-lgpl \
 	--disable-cplayer \
 	--disable-vulkan \
+	--disable-libplacebo \
 	--disable-iconv --lua=52 \
 	--enable-libmpv-shared \
 	--disable-manpage-build \
