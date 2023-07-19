@@ -16,7 +16,6 @@ fi
 
 PKG_CONFIG="pkg-config --static" \
 ./waf configure \
-	--disable-gl \
 	--enable-lgpl \
 	--disable-cplayer \
 	--disable-vulkan \
