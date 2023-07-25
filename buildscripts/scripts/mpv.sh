@@ -20,7 +20,8 @@ PKG_CONFIG="pkg-config --static" \
 	--disable-cplayer \
 	--disable-vulkan \
 	--disable-libplacebo \
-	--disable-iconv --lua=52 \
+	--disable-lua \
+	--disable-iconv \
 	--enable-libmpv-shared \
 	--disable-manpage-build \
 	-o "`pwd`/_build$ndk_suffix"
