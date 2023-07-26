@@ -56,19 +56,6 @@ zip -r "default-armeabi-v7a.jar"              lib/armeabi-v7a
 zip -r "default-x86.jar"                      lib/x86
 zip -r "default-x86_64.jar"                   lib/x86_64
 
-rm -r lib/*/libavcodec.so
-rm -r lib/*/libavdevice.so
-rm -r lib/*/libavfilter.so
-rm -r lib/*/libavformat.so
-rm -r lib/*/libavutil.so
-rm -r lib/*/libswresample.so
-rm -r lib/*/libswscale.so
-
-zip -r "no-ffmpeg-default-arm64-v8a.jar"      lib/arm64-v8a
-zip -r "no-ffmpeg-default-armeabi-v7a.jar"    lib/armeabi-v7a
-zip -r "no-ffmpeg-default-x86.jar"            lib/x86
-zip -r "no-ffmpeg-default-x86_64.jar"         lib/x86_64
-
 mkdir ../../../../../../../../../../output
 
 cp *.jar ../../../../../../../../../../output
