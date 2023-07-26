@@ -24,16 +24,18 @@ cpuflags=
 [[ "$ndk_triple" == "arm"* ]] && cpuflags="$cpuflags -mfpu=neon -mcpu=cortex-a8"
 
 ../configure \
-	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --cc=$CC \
+	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config \
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib" \
 	\
 	--disable-gpl \
 	--disable-nonfree \
 	--enable-version3 \
-	--disable-static \
+	--enable-static \
+	--disable-shared \
 	--disable-vulkan \
 	--disable-iconv \
+	--disable-stripping \
 	\
 	--disable-muxers \
 	--disable-decoders \
@@ -52,7 +54,6 @@ cpuflags=
 	\
 	--enable-jni \
 	--disable-bsfs \
-	--disable-stripping \
 	--disable-mediacodec \
 	\
 	--disable-dxva2 \
@@ -64,7 +65,6 @@ cpuflags=
 	--disable-audiotoolbox \
 	\
 	--enable-small \
-	--enable-shared \
 	--enable-hwaccels \
 	--enable-optimizations \
 	--enable-runtime-cpudetect \
