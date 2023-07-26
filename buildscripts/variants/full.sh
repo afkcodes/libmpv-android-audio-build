@@ -73,6 +73,8 @@ cpuflags=
 	\
 	--enable-libdav1d \
 	\
+	--enable-libxml2 \
+	\
 	--enable-avutil \
 	--enable-avcodec \
 	--enable-avfilter \
