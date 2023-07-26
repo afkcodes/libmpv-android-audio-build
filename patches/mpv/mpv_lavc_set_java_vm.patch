@@ -1,0 +1,44 @@
+diff --git a/libmpv/client.h b/libmpv/client.h
+index fb10e5e..6fd306e 100644
+--- a/libmpv/client.h
++++ b/libmpv/client.h
+@@ -1815,6 +1815,15 @@ MPV_EXPORT int mpv_hook_add(mpv_handle *ctx, uint64_t reply_userdata,
+  */
+ MPV_EXPORT int mpv_hook_continue(mpv_handle *ctx, uint64_t id);
+ 
++/**
++ * Calls av_jni_set_java_vm() with the given JavaVM*.
++ * https://github.com/FFmpeg/FFmpeg/blob/0ba719f726632d73592311615087a0d64aa2fb60/libavcodec/jni.h#L26-L36
++ * 
++ * The av_jni_set_java_vm() symbol is not visible when statically linking with libavcodec.
++ * It is important to call this method so that libavcodec can access JNI environment & thus, mediacodec APIs.
++ */
++MPV_EXPORT int mpv_lavc_set_java_vm(void *vm);
++
+ #if MPV_ENABLE_DEPRECATED
+ 
+ /**
+diff --git a/player/client.c b/player/client.c
+index dd81cdf..19b83d8 100644
+--- a/player/client.c
++++ b/player/client.c
+@@ -22,6 +22,8 @@
+ #include <math.h>
+ #include <assert.h>
+ 
++#include <libavcodec/jni.h>
++
+ #include "common/common.h"
+ #include "common/global.h"
+ #include "common/msg.h"
+@@ -1814,6 +1816,10 @@ int mpv_hook_continue(mpv_handle *ctx, uint64_t id)
+     return r;
+ }
+ 
++int mpv_lavc_set_java_vm(void *vm) {
++    return av_jni_set_java_vm(vm, NULL);
++}
++
+ int mpv_load_config_file(mpv_handle *ctx, const char *filename)
+ {
+     lock_core(ctx);
