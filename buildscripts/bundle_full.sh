@@ -7,6 +7,9 @@ if [ ! -f prefix ]; then
   sudo rm -r prefix
 fi
 
+./download.sh
+./patch.sh
+
 # --------------------------------------------------
 
 rm scripts/ffmpeg.sh

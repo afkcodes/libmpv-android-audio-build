@@ -40,12 +40,6 @@ jobs:
         run: |
           mkdir sdk
           ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
-      - name: Download dependencies
-        working-directory: ./buildscripts
-        run: ./download.sh
-      - name: Apply patches
-        working-directory: ./buildscripts
-        run: ./patch.sh
       - name: Bundle (default)
         working-directory: ./buildscripts
         run: |
