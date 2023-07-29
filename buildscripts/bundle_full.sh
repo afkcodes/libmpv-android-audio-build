@@ -1,5 +1,14 @@
 # --------------------------------------------------
 
+if [ ! -f deps ]; then
+  sudo rm -r deps
+fi
+if [ ! -f prefix ]; then
+  sudo rm -r prefix
+fi
+
+# --------------------------------------------------
+
 rm scripts/ffmpeg.sh
 cp variants/full.sh scripts/ffmpeg.sh
 
@@ -37,14 +46,14 @@ flutter pub get
 
 cp -a ../../mpv/libmpv/. src/include/
 
-cd example/android
+cd example
 
-sudo chmod +x gradlew
-./gradlew assembleRelease
+flutter clean
+flutter build apk --release
 
-unzip -o ../build/app/outputs/apk/release/app-release.apk -d ../build/app/outputs/apk/release
+unzip -o build/app/outputs/apk/release/app-release.apk -d build/app/outputs/apk/release
 
-cd ../build/app/outputs/apk/release/
+cd build/app/outputs/apk/release/
 
 # --------------------------------------------------
 
