@@ -149,6 +149,7 @@ cpuflags=
 	\
 	--enable-protocol=async \
 	--enable-protocol=cache \
+	--enable-protocol=crypto \
 	--enable-protocol=data \
 	--enable-protocol=ffrtmphttp \
 	--enable-protocol=file \
