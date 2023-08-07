@@ -13,7 +13,7 @@ fi
 # --------------------------------------------------
 
 rm scripts/ffmpeg.sh
-cp variants/default.sh scripts/ffmpeg.sh
+cp flavors/default.sh scripts/ffmpeg.sh
 
 # --------------------------------------------------
 
