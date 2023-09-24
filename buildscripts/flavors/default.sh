@@ -106,6 +106,7 @@ cpuflags=
 	--enable-decoder=wma* \
 	--enable-decoder=pcm* \
 	--enable-decoder=dsd* \
+ 	--enable-decoder=dca \
 	\
 	--enable-demuxer=aac \
 	--enable-demuxer=ac3 \
@@ -133,6 +134,8 @@ cpuflags=
 	--enable-demuxer=dsf \
 	--enable-demuxer=dts \
 	--enable-demuxer=truehd \
+        --enable-demuxer=dts \
+        --enable-demuxer=dtshd \
 	\
 	--enable-parser=aac* \
 	--enable-parser=ac3 \
@@ -143,6 +146,7 @@ cpuflags=
 	--enable-parser=mpegaudio \
 	--enable-parser=tak \
 	--enable-parser=vorbis \
+  	--enable-parser=dca \
 	\
 	--enable-filter=overlay \
 	--enable-filter=equalizer \
