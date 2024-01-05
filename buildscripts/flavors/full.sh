@@ -180,6 +180,13 @@ cpuflags=
 	--enable-protocol=tls \
 	--enable-protocol=srt \
 	\
+	--enable-encoder=mjpeg \
+	--enable-encoder=ljpeg \
+	--enable-encoder=jpegls \
+	--enable-encoder=jpeg2000 \
+	--enable-encoder=png \
+	--enable-encoder=jpegls \
+	\
 	--enable-network \
 
 make -j$cores
