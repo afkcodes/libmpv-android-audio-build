@@ -1,17 +1,19 @@
-name: Build libmpv-android
+name: Build
 
-on: 
+on:
   push:
     branches:
       - main
-  pull_request:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
       - name: Setup Java JDK
         uses: actions/setup-java@v4
@@ -25,16 +27,24 @@ jobs:
         run: |
           mkdir sdk
           ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
-      - name: Download dependencies
+      - name: Bundle
         working-directory: ./buildscripts
-        run: ./download.sh
-      - name: Apply patches
-        working-directory: ./buildscripts
-        run: ./patch.sh
-      - name: Build
-        working-directory: ./buildscripts
-        run: ./build.sh
-      - uses: actions/upload-artifact@v4
+        run: |
+          ./bundle.sh
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: libmpv-release.aar
-          path: ./libmpv/build/outputs/aar/libmpv-release.aar
+          name: artifact
+          path: |
+            ./buildscripts/*.jar
+            ./buildscripts/deps/media-kit-android-helper/app/build/outputs/apk/release/*.jar
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main'
+        with:
+          draft: true
+          prerelease: false
+          tag_name: "vnext"
+          files: |
+            buildscripts/*.zip
+            buildscripts/deps/media-kit-android-helper/app/build/outputs/apk/release/*.jar
