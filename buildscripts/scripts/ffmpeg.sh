@@ -104,6 +104,7 @@ cpuflags=
 	--enable-decoder=pcm* \
 	--enable-decoder=dsd* \
  	--enable-decoder=dca \
+	--enable-decoder=truehd \
 	\
 	--enable-decoder=mjpeg \
 	--enable-decoder=ljpeg \
