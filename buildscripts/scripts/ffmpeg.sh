@@ -61,6 +61,63 @@ cpuflags=
 # stays LGPLv3, exactly as before.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Audio filters / EQ + DSP (rn-media)
+#
+# Same trap as the demuxers: `--disable-filters` below makes the allow-list the
+# whole world, and it held exactly two entries -- `overlay` (video) and
+# `equalizer`.  `--enable-avfilter` *is* set and mpv's libavfilter bridge
+# (filters/f_lavfi.c) *is* compiled, so `af=<name>=...` resolves through
+# avfilter_get_by_name(); it simply had nothing to resolve to.  Verified on the
+# shipped v1.1.9-rnmedia.1 arm64 binary:
+#   _build-arm64/config_components.h -> only CONFIG_EQUALIZER_FILTER 1
+#                                       and  CONFIG_OVERLAY_FILTER 1
+#
+# `aresample` is the load-bearing one and is NOT optional:
+# libavfilter/avfiltergraph.c:486-492 auto-inserts `neg->conversion_filter`
+# (= "aresample" for audio, ff_default_query_formats/audio negotiation) whenever
+# two linked pads cannot agree a format, and if that filter is absent the graph
+# config fails outright with "'aresample' filter not present, cannot convert
+# formats".  Every filter below pins a *different* sample format --
+# superequalizer/firequalizer FLTP, anequalizer/dynaudnorm DBLP, loudnorm /
+# crossfeed / acompressor / alimiter DBL (packed), biquads S16P|S32P|FLTP|DBLP --
+# and loudnorm additionally pins 192 kHz input in its non-linear mode
+# (af_loudnorm.c:734,746).  Without aresample, even a single-filter chain is one
+# decoder sample-format away from failing.  Its only configure dep is
+# `aresample_filter_deps="swresample"` (configure:3630) and swresample is already
+# enabled above -- checked, not assumed.
+#
+# Everything else here has NO `_deps`/`_select` line in FFmpeg n6.0's configure
+# (grepped `^<name>_filter_(deps|select|suggest)=` -- no match for any of them),
+# so each flag costs exactly its own object file:
+#   volume            af_volume.o          pre-amp / headroom before EQ boost
+#   equalizer         af_biquads.o         (already enabled; kept)
+#   bass treble       af_biquads.o         shelving; SAME object as equalizer,
+#   lowpass highpass  af_biquads.o         so these four are registration-only
+#                                          (Makefile:120,137,166 + 1623/1640)
+#   anequalizer       af_anequalizer.o     N-band parametric IIR, per-channel
+#   superequalizer    af_superequalizer.o  18-band graphic EQ
+#   firequalizer      af_firequalizer.o    linear-phase FIR EQ
+#   acompressor       af_sidechaincompress.o
+#   alimiter          af_alimiter.o        true-peak clip guard after EQ boost
+#   dynaudnorm        af_dynaudnorm.o      cheap live loudness levelling
+#   loudnorm          af_loudnorm.o + ebur128.o   EBU R128 (expensive: 192 kHz)
+#   crossfeed         af_crossfeed.o       headphone crossfeed
+#   aformat anull     af_aformat.o/af_anull.o  format pinning + no-op passthrough
+#
+# superequalizer and firequalizer used to need libavcodec's RDFT; in n6.0 both
+# include "libavutil/tx.h" only (af_superequalizer.c:23, af_firequalizer.c:26),
+# so they add no avcodec surface.
+#
+# LICENSING -- checked, this is the whole reason the list is not longer:
+# FFmpeg gates GPL-only components with `<name>_filter_deps="gpl"`.  In n6.0
+# every single one of those 34 entries (configure:3636-3756) is a *video*
+# filter (eq, hqdn3d, delogo, spp, pp, ...).  None of the audio filters above
+# carries a gpl dep, and none is named in LICENSE.md's GPL/nonfree sections.
+# So: still --disable-gpl --disable-nonfree --enable-version3, i.e. LGPLv3,
+# no new external library, no ABI change.
+# ---------------------------------------------------------------------------
+
 ../configure \
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config --nm=llvm-nm \
@@ -198,7 +255,24 @@ cpuflags=
   	--enable-parser=dca \
 	\
 	--enable-filter=overlay \
+	\
+	--enable-filter=aresample \
+	--enable-filter=aformat \
+	--enable-filter=anull \
+	--enable-filter=volume \
 	--enable-filter=equalizer \
+	--enable-filter=bass \
+	--enable-filter=treble \
+	--enable-filter=lowpass \
+	--enable-filter=highpass \
+	--enable-filter=anequalizer \
+	--enable-filter=superequalizer \
+	--enable-filter=firequalizer \
+	--enable-filter=acompressor \
+	--enable-filter=alimiter \
+	--enable-filter=dynaudnorm \
+	--enable-filter=loudnorm \
+	--enable-filter=crossfeed \
 	\
 	--enable-protocol=async \
 	--enable-protocol=cache \
