@@ -23,6 +23,44 @@ cpu=armv7-a
 cpuflags=
 [[ "$ndk_triple" == "arm"* ]] && cpuflags="$cpuflags -mfpu=neon -mcpu=cortex-a8"
 
+# ---------------------------------------------------------------------------
+# HLS support (rn-media)
+#
+# `--disable-demuxers` below makes the explicit allow-list the whole world, and
+# it contained neither `hls` nor `mpegts`, so every `.m3u8` failed to demux even
+# though `--enable-protocol=hls` was already present (that is the deprecated
+# `hls://` *protocol*, not the demuxer, and it is useless on its own).
+#
+#   --enable-demuxer=hls      libavformat/hls.c, the actual HLS implementation.
+#   --enable-demuxer=mpegts   the container of `.ts` media segments. FFmpeg's
+#                             configure:3439 declares
+#                               hls_demuxer_select="adts_header ac3_parser
+#                                                   mov_demuxer mpegts_demuxer"
+#                             so it would be pulled in implicitly anyway; it is
+#                             listed explicitly so the dependency is visible in
+#                             the recorded configure line, and so that plain
+#                             `.ts` URLs work too.
+#
+# Everything else HLS needs is already satisfied by the existing allow-list —
+# verified against the FFmpeg n6.0 tree this script builds, not from memory:
+#   mov demuxer (fMP4 / CMAF segments)        already enabled below
+#   ac3 + aac* + mpegaudio parsers            already enabled below
+#                                             (hls_demuxer_select needs
+#                                              ac3_parser; AAC-in-TS needs the
+#                                              aac parser)
+#   crypto protocol (#EXT-X-KEY AES-128)      already enabled below; hls.c:1318
+#                                             builds `crypto:`/`crypto+` URLs.
+#                                             It has no configure `_deps` line,
+#                                             so the flag alone compiles
+#                                             libavformat/crypto.o (Makefile:650)
+#   id3v2 (timed metadata inside segments)    no flag exists or is needed:
+#                                             libavformat/Makefile lists id3v2.o
+#                                             in the unconditional OBJS block
+#
+# No GPL/nonfree flag and no new external library is introduced: the bundle
+# stays LGPLv3, exactly as before.
+# ---------------------------------------------------------------------------
+
 ../configure \
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config --nm=llvm-nm \
@@ -145,6 +183,8 @@ cpuflags=
 	--enable-demuxer=truehd \
 	--enable-demuxer=dts \
 	--enable-demuxer=dtshd \
+	--enable-demuxer=hls \
+	--enable-demuxer=mpegts \
 	\
 	--enable-parser=aac* \
 	--enable-parser=ac3 \
