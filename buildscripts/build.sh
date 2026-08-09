@@ -112,7 +112,13 @@ build () {
 	printf >&2 '\e[1;34m%s\e[m\n' "Building $1..."
 	pushd deps/$1
 	BUILDSCRIPT=../../scripts/$1.sh
- 	sudo chmod +x $BUILDSCRIPT
+	# buildscripts/scripts/*.sh are mode 100755 in git, so this is only a
+	# guard for checkouts that lost the bit (zip/tarball export, a
+	# filesystem mounted without exec bits). Deliberately no `sudo`: the
+	# tree belongs to the caller, and in a non-interactive build (CI, a
+	# container with no tty, a sandbox with no sudo on PATH) sudo either
+	# blocks on a password prompt or aborts the whole build.
+	[ -x "$BUILDSCRIPT" ] || chmod +x "$BUILDSCRIPT"
 	[ $cleanbuild -eq 1 ] && $BUILDSCRIPT clean
     $BUILDSCRIPT build
     popd
