@@ -81,16 +81,7 @@ REBASING
 diff --git a/audio/out/ao.c b/audio/out/ao.c
 --- a/audio/out/ao.c
 +++ b/audio/out/ao.c
-@@ -20,6 +20,8 @@
- #include <string.h>
- #include <math.h>
- #include <assert.h>
-+#include <pthread.h>
-+#include <stdatomic.h>
- 
- #include "mpv_talloc.h"
- 
-@@ -34,6 +36,7 @@
+@@ -34,6 +34,7 @@
  #include "common/msg.h"
  #include "common/common.h"
  #include "common/global.h"
@@ -98,7 +89,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
  
  extern const struct ao_driver audio_out_oss;
  extern const struct ao_driver audio_out_audiotrack;
-@@ -642,6 +645,223 @@
+@@ -642,6 +643,227 @@
      }
  }
  
@@ -241,9 +232,11 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +    if (!tap) {
 +        if (frames <= 0)
 +            return;     // disarming a tap that was never armed
++        // talloc_zero leaves `armed` false in both atomic modes (a zeroed
++        // _Atomic(_Bool) and a zeroed struct{_Bool} are both "false"), which is
++        // why there is no atomic_init here — mpv's fallback has none.
 +        tap = talloc_zero(global, struct mp_pcm_tap);
 +        pthread_mutex_init(&tap->lock, NULL);
-+        atomic_init(&tap->armed, false);
 +        tap->window = MPCLAMP(frames, MP_PCM_TAP_MIN_FRAMES,
 +                              MP_PCM_TAP_MAX_FRAMES);
 +        // Release: the initialisation above must be visible to the audio
@@ -265,13 +258,15 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +                              MP_PCM_TAP_MAX_FRAMES);
 +    pthread_mutex_unlock(&tap->lock);
 +
-+    atomic_store_explicit(&tap->armed, frames > 0, memory_order_release);
++    // Plain atomic_store: mpv's non-C11 fallback provides no _explicit form,
++    // and its emulation is a global mutex, i.e. already a full barrier.
++    atomic_store(&tap->armed, frames > 0);
 +}
 +
 +int mp_pcm_tap_window(struct mpv_global *global)
 +{
 +    struct mp_pcm_tap *tap = tap_peek(global);
-+    if (!tap || !atomic_load_explicit(&tap->armed, memory_order_acquire))
++    if (!tap || !atomic_load_explicit(&tap->armed, memory_order_seq_cst))
 +        return 0;
 +    return tap->window;
 +}
@@ -281,7 +276,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +{
 +    struct mp_pcm_tap *tap = tap_peek(global);
 +    if (!tap || !out ||
-+        !atomic_load_explicit(&tap->armed, memory_order_acquire))
++        !atomic_load_explicit(&tap->armed, memory_order_seq_cst))
 +        return false;
 +
 +    pthread_mutex_lock(&tap->lock);
@@ -322,7 +317,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
  void ao_post_process_data(struct ao *ao, void **data, int num_samples)
  {
      bool planar = af_fmt_is_planar(ao->format);
-@@ -649,6 +869,9 @@
+@@ -649,6 +871,9 @@
      int plane_samples = num_samples * (planar ? 1: ao->channels.num);
      for (int n = 0; n < planes; n++)
          process_plane(ao, data[n], plane_samples);
