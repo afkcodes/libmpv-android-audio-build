@@ -10,3 +10,6 @@ obj
 build
 local.properties
 *~
+
+# rn-media release helper output (assets are uploaded, never committed)
+buildscripts/rn-media-release/
