@@ -75,17 +75,26 @@ setup_prefix () {
 
 	# meson wants to be spoonfed this file, so create it ahead of time
 	# also define: release build, static libs and no source downloads at runtime(!!!)
+	#
+	# `default_library = 'static'` is right for every dependency and WRONG for
+	# libmpv itself, which has to come out as a .so — scripts/mpv.sh overrides
+	# it on the command line. `system = 'android'` below is load-bearing rather
+	# than cosmetic: meson only skips shared-library versioning (libmpv.so.2.x.0
+	# plus symlinks, which an APK cannot package) when the host system says
+	# android.
 	cat >"$prefix_dir/crossfile.txt" <<CROSSFILE
 [built-in options]
 buildtype = 'release'
 default_library = 'static'
 wrap_mode = 'nodownload'
+prefix = '/usr/local'
 [binaries]
 c = '$CC'
 cpp = '$CXX'
 ar = 'llvm-ar'
 nm = 'llvm-nm'
 strip = 'llvm-strip'
+pkgconfig = 'pkg-config'
 pkg-config = 'pkg-config'
 [host_machine]
 system = 'android'

@@ -6,11 +6,24 @@
 # exactly as a release asset expects them, and — the part that matters —
 # verifies the result in the SHIPPED artifact rather than in the build log.
 #
-# Why this exists: mpv's waf does not relink libmpv.so when ffmpeg's static
-# libs change, so a rebuilt dependency next to a stale .so looks like a
-# successful build and silently ships the old binary. Every rn-media release
+# Why this exists: under waf, mpv did not relink libmpv.so when ffmpeg's static
+# libs changed, so a rebuilt dependency next to a stale .so looked like a
+# successful build and silently shipped the old binary. Every rn-media release
 # has to prove its new capability with a string that only the new code emits;
 # doing that by hand is how it eventually gets skipped.
+#
+# THAT TRAP DOES NOT REPRODUCE UNDER MESON — re-tested rather than assumed when
+# this fork moved to mpv 0.41 (meson-only since 0.37). ninja names every static
+# archive as an explicit input of the link edge, so touching
+# prefix/<abi>/lib/libavfilter.a and re-running ninja re-executes
+# "Linking target libmpv.so". The resulting .so was byte-identical, because a
+# touch changes the mtime and not the content — the point is that the link ran
+# at all, which is precisely what waf failed to do.
+#
+# So `--clean` below is belt-and-braces now rather than load-bearing. It stays:
+# it costs one rebuild per release, and what it defends against is a silently
+# stale artifact. The real guarantee was never the build system anyway — it is
+# the marker check on the SHIPPED binary a few lines down.
 #
 #   ./rn-media-release.sh                 build + package + verify
 #   ./rn-media-release.sh --no-build      package + verify what is in prefix/

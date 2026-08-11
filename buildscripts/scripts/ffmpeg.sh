@@ -118,6 +118,47 @@ cpuflags=
 # no new external library, no ABI change.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# FFmpeg 6.0 -> 8.1.2 (rn-media)
+#
+# ONE flag had to go: `--disable-postproc`. libpostproc was removed from the
+# FFmpeg tree in 8.0, so configure now rejects the option outright ("Unknown
+# option --disable-postproc") and the whole build dies before it starts. It was
+# GPL-only and this build never shipped it, so dropping the flag changes
+# nothing about the artifact — it only stops asking for something that no
+# longer exists.
+#
+# EVERY other flag below was re-verified against the 8.1.2 configure, and every
+# component in the allow-lists was re-verified against 8.1.2's own registration
+# tables (libavformat/allformats.c, libavcodec/allcodecs.c, libavcodec/parsers.c,
+# libavformat/protocols.c, libavfilter/allfilters.c) rather than against
+# memory or a changelog. All 16 audio filters, both HLS demuxers, every decoder,
+# parser and protocol still exist under the same name.
+#
+# THREE entries do not match anything. configure warns and ignores them; the
+# build is unaffected. Observed verbatim in the 8.1.2 arm64 configure output:
+#   WARNING: Option --enable-decoder=ljpeg did not match anything
+#   WARNING: Option --enable-protocol=hls did not match anything
+#   WARNING: Option --enable-protocol=srt did not match anything
+#
+#   --enable-decoder=ljpeg    pre-existing no-op, also silent in 6.0: ljpeg is
+#                             an ENCODER only, there has never been an ljpeg
+#                             decoder (mjpeg decodes it).
+#   --enable-protocol=srt     pre-existing no-op: needs external libsrt, which
+#                             is not linked.
+#   --enable-protocol=hls     NEW no-op. FFmpeg finally deleted the deprecated
+#                             `hls://` protocol. This is the cleanest possible
+#                             confirmation of the trap already recorded in
+#                             rn-media's ARCHITECTURE ("--enable-protocol=hls
+#                             proves nothing"): the flag is gone, and HLS still
+#                             works, because what carries it is the DEMUXER —
+#                             `CC libavformat/hls.o` in the same build log, and
+#                             CONFIG_HLS_DEMUXER=1 in config_components.h.
+#
+# All three are left in place so this diff stays about the version bump.
+# Deleting them is a separate, cosmetic change.
+# ---------------------------------------------------------------------------
+
 ../configure \
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config --nm=llvm-nm \
@@ -141,7 +182,6 @@ cpuflags=
 	--disable-filters \
 	--disable-doc \
 	--disable-avdevice \
-	--disable-postproc \
 	--disable-programs \
 	--disable-gray \
 	--disable-swscale-alpha \

@@ -13,8 +13,9 @@ PROVENANCE
     The idea, the tap point and the property name `pcm-tap-frame` follow
     ales-drnz/libmpv-scripts (BSD-3-Clause), the patch set behind the Flutter
     package `mpv_audio_kit` — the only shipped precedent for reading PCM out
-    of libmpv.  This implementation is written from scratch against mpv
-    0.35.1/0.36.0 and differs from it deliberately in three ways:
+    of libmpv.  This implementation is written from scratch — originally
+    against mpv 0.35.1/0.36.0, now maintained against 0.41.0 — and differs
+    from it deliberately in three ways:
       * the tap hangs off `mpv_global`, so several mpv cores in one process
         each tap their own audio.  Theirs is a process-wide singleton whose
         own comments call the multi-core behaviour "benign but wrong-looking";
@@ -23,6 +24,10 @@ PROVENANCE
         fixed 256 KiB static plus a 256 KiB conversion scratch;
       * samples are converted straight into the ring, so there is no scratch
         buffer and no chunk-size ceiling.
+
+APPLIES TO
+    mpv 0.41.0.  Previously applied unchanged to 0.35.1 and 0.36.0; see
+    "0.35 -> 0.41 REBASE NOTES" below for what had to move.
 
 WHAT IT ADDS
     `pcm-tap`        int, read/write, default 0.  The number of samples per
@@ -34,7 +39,8 @@ WHAT IT ADDS
                        sample_rate  int64   Hz
                        channels     int64   interleaving factor of `samples`
                        frames       int64   samples per channel
-                       pts_us       int64   mp_time_us() of the newest chunk
+                       pts_us       int64   microseconds when the newest chunk
+                                            was tapped, i.e. mp_time_ns()/1000
                        seq          int64   monotonic chunk counter; an
                                             unchanged value means no new audio
                                             reached the device (paused, EOF)
@@ -60,36 +66,133 @@ WHERE IT TAPS
 THREADING
     Writes run on the audio device's own thread (the AudioTrack feeder on
     Android, the AudioUnit render callback on iOS).  That thread never blocks:
-    it takes the tap lock with pthread_mutex_trylock and drops the chunk on
+    it takes the tap lock with mp_mutex_trylock and drops the chunk on
     contention, which costs at most one frame of a visualizer.  The reader
     (the property getter, on the core thread) holds the lock for one memcpy.
+    mp_mutex_trylock is a #define onto pthread_mutex_trylock in
+    osdep/threads-posix.h, so it keeps pthread return semantics: 0 means the
+    lock was acquired, and any non-zero result must drop the chunk.
 
 REBASING
-    Four files, no build-system files, so this applies to both the waf build
-    (Android) and the meson build (darwin) unchanged.  It has been applied to
-    mpv 0.35.1 and 0.36.0 from the same file — only hunk offsets differ.
-    The anchors to re-check after a version bump are:
-      audio/out/ao.c        ao_post_process_data()'s body (unchanged 0.35-0.41)
-      audio/out/ao.h        the ao_print_devices() declaration at end of file
-      common/global.h       struct mpv_global
-      player/command.c      mp_property_audio_params() and the
-                            {"audio-out-params", ...} property-table entry
+    Four files, no build-system files.  mpv dropped waf in 0.37, so from
+    0.37 on there is only the meson build, and this patch is independent of
+    it either way.  The anchors to re-check after a version bump are:
+      audio/out/ao.c    ao_post_process_data()'s body.  Unchanged from 0.35.1
+                        through 0.41.0; the tap call is its last statement.
+      audio/out/ao.h    the ao_print_devices() declaration at end of file.
+                        Its signature is unchanged 0.35.1 -> 0.41.0 (it has
+                        taken `struct ao *playback_ao` since before 0.35.1);
+                        it is only an anchor, nothing calls it here.
+      common/global.h   struct mpv_global.  0.41 added
+                        `struct demux_packet_pool *packet_pool;` as its last
+                        member, so the tap pointer now follows that line.
+      player/command.c  mp_property_audio_params() — the two handlers go
+                        immediately above it — and the {"audio-out-params",
+                        ...} property-table entry, which the two new rows
+                        follow.  Note 0.41 renamed the neighbouring
+                        property_switch_track() to mp_property_switch_track(),
+                        which only matters as diff context.
     If ao_post_process_data() is ever renamed or split, the tap moves with it;
     the only requirement is that it sees interleaved-or-planar PCM in
     ao->format together with ao->channels/ao->samplerate.
+    Keep the player/command.c edits inside the audio-property region: our
+    other patches touch include/mpv/client.h + player/client.c, and
+    meson.build + sub/* + the libass-version property getter (command.c
+    line ~4542, far from the audio rows).
+
+0.35 -> 0.41 REBASE NOTES
+    Behaviour is unchanged.  Every edit below is an idiom substitution
+    forced by an upstream API change; the clamping, the trylock-and-drop
+    write path, the one-relaxed-load-while-disarmed cost, the per-core
+    ownership and the node field names/units are all identical.
+
+    All four upstream changes below landed in 0.37.0 and are unchanged
+    through 0.41.0 (verified against the v0.36.0/v0.37.0/v0.38.0 tags).
+
+    Threading (0.37 replaced raw pthreads with its own wrappers,
+    osdep/threads.h -> osdep/threads-posix.h):
+      pthread_mutex_t          -> mp_mutex
+      pthread_mutex_init(m,    -> mp_mutex_init(m)          [no attr arg]
+                         NULL)
+      pthread_mutex_lock       -> mp_mutex_lock
+      pthread_mutex_trylock    -> mp_mutex_trylock
+      pthread_mutex_unlock     -> mp_mutex_unlock
+      audio/out/ao.c now includes "osdep/threads.h".
+      All four mp_mutex_* names are plain #defines onto the pthread calls,
+      so return values and semantics carry over exactly.  mp_mutex_init()
+      is the one real function: it selects PTHREAD_MUTEX_ERRORCHECK in
+      debug builds and PTHREAD_MUTEX_DEFAULT otherwise, and DEFAULT is what
+      a NULL attr gave before — so release builds are unchanged and debug
+      builds only gain misuse detection we do not trip.
+
+    Atomics (0.37 deleted osdep/atomic.h; C11 stdatomic is now mandatory —
+    meson.build sets c_std=c11, and audio/out/internal.h declares
+    `_Atomic float gain`):
+      #include "osdep/atomic.h"  -> #include <stdatomic.h>
+      global->pcm_tap: void *    -> _Atomic(struct mp_pcm_tap *)
+      __atomic_load_n(..., __ATOMIC_ACQUIRE)
+                                 -> atomic_load_explicit(...,
+                                        memory_order_acquire)
+      __atomic_store_n(..., __ATOMIC_RELEASE)
+                                 -> atomic_store_explicit(...,
+                                        memory_order_release)
+    The acquire/release pair that publishes the tap pointer is the same
+    ordering, now expressed in C11 rather than in GCC builtins (which
+    appear nowhere in the 0.41 tree).  The pointer no longer has to be a
+    bare void*: _Atomic is a C11 keyword, not a <stdatomic.h> typedef, so
+    common/global.h still needs no new #include, and no C++ translation
+    unit includes that header.  `armed` keeps its exact orderings: relaxed
+    on the audio thread, seq_cst on the core thread, and a plain (seq_cst)
+    atomic_store to publish arm/disarm — atomic_store on ao->gain in the
+    same file is the house precedent.  It is still left false by
+    talloc_zero rather than atomic_init, which is what mpv itself does
+    (atomic_init and ATOMIC_VAR_INIT appear nowhere in 0.41).
+
+    Time (0.37 moved the clock from microseconds to nanoseconds;
+    osdep/timer.h at v0.41.0 declares only mp_time_ns()):
+      mp_time_us()             -> mp_time_ns() / 1000
+    `pts_us` stays in MICROseconds, so the property's unit and the
+    struct mp_pcm_tap_frame field are unchanged; only the source clock and
+    the divisor are new.  Integer division is deliberate — the
+    MP_TIME_NS_TO_US() macro in osdep/timer.h yields a double.
+
+    Unchanged and re-verified against v0.41.0, no substitution needed:
+      af_fmt_is_pcm / af_fmt_is_planar / af_fmt_from_planar  audio/format.h
+      AF_FORMAT_U8/S16/S32/S64/FLOAT/DOUBLE                  audio/format.h
+      MP_NUM_CHANNELS (64)                                   audio/chmap.h
+      MPMIN / MPCLAMP                                        common/common.h
+      talloc_array / talloc_zero / talloc_memdup / TA_FREEP   ta/ta_talloc.h
+      M_PROPERTY_OK / _UNAVAILABLE / _NOT_IMPLEMENTED,
+        M_PROPERTY_GET_TYPE / _GET / _SET                 options/m_property.h
+      struct m_option { double min, max; },
+        CONF_TYPE_INT, CONF_TYPE_NODE                      options/m_option.h
+      node_init / node_map_add / node_map_add_int64             misc/node.h
+      mpv_byte_array, MPV_FORMAT_NODE_MAP, MPV_FORMAT_BYTE_ARRAY
+                                                          include/mpv/client.h
+      struct ao { global, format, channels, samplerate }   audio/out/internal.h
+      the property-table row format, still {"name", handler}   player/command.c
 
 diff --git a/audio/out/ao.c b/audio/out/ao.c
 --- a/audio/out/ao.c
 +++ b/audio/out/ao.c
-@@ -34,6 +34,7 @@
+@@ -20,6 +20,7 @@
+ #include <string.h>
+ #include <math.h>
+ #include <assert.h>
++#include <stdatomic.h>
+ 
+ #include "mpv_talloc.h"
+ 
+@@ -34,6 +35,8 @@
  #include "common/msg.h"
  #include "common/common.h"
  #include "common/global.h"
++#include "osdep/threads.h"
 +#include "osdep/timer.h"
  
  extern const struct ao_driver audio_out_oss;
  extern const struct ao_driver audio_out_audiotrack;
-@@ -642,6 +643,227 @@
+@@ -652,6 +655,228 @@ static void process_plane(struct ao *ao, void *data, int num_samples)
      }
  }
  
@@ -104,7 +207,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +//
 +//  * The write path runs on the audio device's own thread (the AudioTrack
 +//    feeder on Android, the AudioUnit render callback on iOS).  It must never
-+//    block, so it takes the lock with trylock and drops the chunk on
++//    block, so it takes the lock with mp_mutex_trylock and drops the chunk on
 +//    contention.  The reader holds the lock for one memcpy, so contention is
 +//    rare and one dropped chunk costs one frame of a visualiser.
 +//  * There is one tap per mpv core, hung off mpv_global, because a single
@@ -118,7 +221,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +// ===========================================================================
 +
 +struct mp_pcm_tap {
-+    pthread_mutex_t lock;
++    mp_mutex lock;
 +    // Read once per device chunk on the audio thread; the only thing a
 +    // disarmed tap costs.
 +    atomic_bool armed;
@@ -141,8 +244,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +{
 +    if (!global)
 +        return NULL;
-+    return __atomic_load_n((struct mp_pcm_tap **)&global->pcm_tap,
-+                           __ATOMIC_ACQUIRE);
++    return atomic_load_explicit(&global->pcm_tap, memory_order_acquire);
 +}
 +
 +// One sample of any PCM format mpv can hand a device, as a float in [-1, 1].
@@ -181,7 +283,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +    if (channels <= 0 || channels > MP_NUM_CHANNELS)
 +        return;
 +
-+    if (pthread_mutex_trylock(&tap->lock) != 0)
++    if (mp_mutex_trylock(&tap->lock) != 0)
 +        return;
 +
 +    if (!tap->ring || tap->channels != channels ||
@@ -195,7 +297,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +        tap->valid_floats = 0;
 +    }
 +    if (!tap->ring) {
-+        pthread_mutex_unlock(&tap->lock);
++        mp_mutex_unlock(&tap->lock);
 +        return;
 +    }
 +
@@ -218,10 +320,12 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +    int written = (num_samples - first) * channels;
 +    tap->valid_floats = MPMIN(tap->valid_floats + written, tap->ring_floats);
 +    tap->rate = ao->samplerate;
-+    tap->pts_us = mp_time_us();
++    // mpv 0.37 dropped mp_time_us(); the property is documented in
++    // microseconds, so keep the unit and divide the nanosecond clock.
++    tap->pts_us = mp_time_ns() / 1000;
 +    tap->seq++;
 +
-+    pthread_mutex_unlock(&tap->lock);
++    mp_mutex_unlock(&tap->lock);
 +}
 +
 +void mp_pcm_tap_configure(struct mpv_global *global, int frames)
@@ -232,20 +336,19 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +    if (!tap) {
 +        if (frames <= 0)
 +            return;     // disarming a tap that was never armed
-+        // talloc_zero leaves `armed` false in both atomic modes (a zeroed
-+        // _Atomic(_Bool) and a zeroed struct{_Bool} are both "false"), which is
-+        // why there is no atomic_init here — mpv's fallback has none.
++        // talloc_zero leaves `armed` false: a zeroed atomic_bool is false, and
++        // that is how mpv itself initialises its atomic members (atomic_init
++        // and ATOMIC_VAR_INIT appear nowhere in the 0.41 tree).
 +        tap = talloc_zero(global, struct mp_pcm_tap);
-+        pthread_mutex_init(&tap->lock, NULL);
++        mp_mutex_init(&tap->lock);
 +        tap->window = MPCLAMP(frames, MP_PCM_TAP_MIN_FRAMES,
 +                              MP_PCM_TAP_MAX_FRAMES);
 +        // Release: the initialisation above must be visible to the audio
 +        // thread before it can reach the object at all.
-+        __atomic_store_n((struct mp_pcm_tap **)&global->pcm_tap, tap,
-+                         __ATOMIC_RELEASE);
++        atomic_store_explicit(&global->pcm_tap, tap, memory_order_release);
 +    }
 +
-+    pthread_mutex_lock(&tap->lock);
++    mp_mutex_lock(&tap->lock);
 +    // Reset unconditionally: a re-arm must never hand the new subscriber a
 +    // window recorded for the previous one.
 +    TA_FREEP(&tap->ring);
@@ -256,10 +359,11 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +    if (frames > 0)
 +        tap->window = MPCLAMP(frames, MP_PCM_TAP_MIN_FRAMES,
 +                              MP_PCM_TAP_MAX_FRAMES);
-+    pthread_mutex_unlock(&tap->lock);
++    mp_mutex_unlock(&tap->lock);
 +
-+    // Plain atomic_store: mpv's non-C11 fallback provides no _explicit form,
-+    // and its emulation is a global mutex, i.e. already a full barrier.
++    // Plain atomic_store, i.e. seq_cst, matching the seq_cst loads in
++    // mp_pcm_tap_window()/mp_pcm_tap_read(): a client that sets `pcm-tap` and
++    // reads it straight back must never observe the previous arming state.
 +    atomic_store(&tap->armed, frames > 0);
 +}
 +
@@ -279,18 +383,18 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +        !atomic_load_explicit(&tap->armed, memory_order_seq_cst))
 +        return false;
 +
-+    pthread_mutex_lock(&tap->lock);
++    mp_mutex_lock(&tap->lock);
 +    if (!tap->ring || tap->valid_floats <= 0 || tap->channels <= 0 ||
 +        tap->rate <= 0)
 +    {
-+        pthread_mutex_unlock(&tap->lock);
++        mp_mutex_unlock(&tap->lock);
 +        return false;
 +    }
 +
 +    int floats = tap->valid_floats;
 +    float *copy = talloc_array(ta_ctx, float, floats);
 +    if (!copy) {
-+        pthread_mutex_unlock(&tap->lock);
++        mp_mutex_unlock(&tap->lock);
 +        return false;
 +    }
 +    // The window ends at write_pos (exclusive); walk back `floats` with wrap
@@ -310,14 +414,14 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 +        .seq = tap->seq,
 +        .data = copy,
 +    };
-+    pthread_mutex_unlock(&tap->lock);
++    mp_mutex_unlock(&tap->lock);
 +    return true;
 +}
 +
  void ao_post_process_data(struct ao *ao, void **data, int num_samples)
  {
      bool planar = af_fmt_is_planar(ao->format);
-@@ -649,6 +871,9 @@
+@@ -659,6 +884,9 @@ void ao_post_process_data(struct ao *ao, void **data, int num_samples)
      int plane_samples = num_samples * (planar ? 1: ao->channels.num);
      for (int n = 0; n < planes; n++)
          process_plane(ao, data[n], plane_samples);
@@ -330,7 +434,7 @@ diff --git a/audio/out/ao.c b/audio/out/ao.c
 diff --git a/audio/out/ao.h b/audio/out/ao.h
 --- a/audio/out/ao.h
 +++ b/audio/out/ao.h
-@@ -130,4 +130,41 @@
+@@ -117,4 +117,41 @@ struct ao_device_list *ao_hotplug_get_device_list(struct ao_hotplug *hp, struct
  
  void ao_print_devices(struct mpv_global *global, struct mp_log *log, struct ao *playback_ao);
  
@@ -353,7 +457,7 @@ diff --git a/audio/out/ao.h b/audio/out/ao.h
 +    int channels;       // interleaving factor of `data`
 +    int frames;         // samples per channel in `data`
 +    int floats;         // frames * channels, i.e. the length of `data`
-+    int64_t pts_us;     // mp_time_us() when the newest chunk was tapped
++    int64_t pts_us;     // mp_time_ns()/1000 when the newest chunk was tapped
 +    int64_t seq;        // monotonic chunk counter; unchanged == no new audio
 +    float *data;        // talloc'd on the ta_ctx passed to mp_pcm_tap_read()
 +};
@@ -375,23 +479,24 @@ diff --git a/audio/out/ao.h b/audio/out/ao.h
 diff --git a/common/global.h b/common/global.h
 --- a/common/global.h
 +++ b/common/global.h
-@@ -10,6 +10,12 @@
-     struct mp_client_api *client_api;
+@@ -11,6 +11,13 @@ struct mpv_global {
      char *configdir;
      struct stats_base *stats;
+     struct demux_packet_pool *packet_pool;
 +    // rn-media: the PCM tap (audio/out/ao.c), or NULL until something arms it.
 +    // It lives here, and not in a file-static, because one process runs several
-+    // mpv cores and each has to tap its own audio.  Deliberately a bare void*:
-+    // this header is included by most of mpv, and the tap is published with a
-+    // release store / read with an acquire load in ao.c, which needs no type.
-+    void *pcm_tap;
++    // mpv cores and each has to tap its own audio.  It is published with a
++    // release store and read with an acquire load in ao.c, hence the C11
++    // atomic; mpv 0.41 builds as c11 and declares atomic members exactly this
++    // way (cf. `_Atomic float gain` in audio/out/internal.h).
++    _Atomic(struct mp_pcm_tap *) pcm_tap;
  };
  
  #endif
 diff --git a/player/command.c b/player/command.c
 --- a/player/command.c
 +++ b/player/command.c
-@@ -1790,6 +1790,74 @@
+@@ -1893,6 +1893,74 @@ static int property_audiofmt(struct mp_aframe *fmt, int action, void *arg)
      return m_property_read_sub(props, action, arg);
  }
  
@@ -466,12 +571,12 @@ diff --git a/player/command.c b/player/command.c
  static int mp_property_audio_params(void *ctx, struct m_property *prop,
                                      int action, void *arg)
  {
-@@ -3639,6 +3707,8 @@
-     {"audio-codec", mp_property_audio_codec},
+@@ -4436,6 +4504,8 @@ static const struct m_property mp_properties_base[] = {
+     M_PROPERTY_ALIAS("audio-codec", "current-tracks/audio/codec-desc"),
      {"audio-params", mp_property_audio_params},
      {"audio-out-params", mp_property_audio_out_params},
 +    {"pcm-tap", mp_property_pcm_tap},
 +    {"pcm-tap-frame", mp_property_pcm_tap_frame},
-     {"aid", property_switch_track, .priv = (void *)(const int[]){0, STREAM_AUDIO}},
+     {"aid", mp_property_switch_track, .priv = (void *)(const int[]){0, STREAM_AUDIO}},
      {"audio-device", mp_property_audio_device},
      {"audio-device-list", mp_property_audio_devices},

@@ -1,0 +1,29 @@
+/*
+ * Export list for libmpv.so.
+ *
+ * mpv's waf build derived one of these from libmpv/mpv.def, which is why the
+ * shipped v1.1.9 binaries exported exactly the 53 names in that file and
+ * nothing else. mpv 0.37 deleted mpv.def, and 0.41's meson relies solely on
+ * `gnu_symbol_visibility: 'hidden'` plus the MPV_EXPORT attribute in the public
+ * header. That is enough for mpv's OWN objects — and does nothing at all for
+ * the static archives we link in.
+ *
+ * FFmpeg, libplacebo, mbedTLS, libxml2 and zlib are all compiled without hidden
+ * visibility and enter the link as static archives, so without this file
+ * libmpv.so exports 4020 symbols instead of 55: every `av_*`, every `adler32`,
+ * the lot. Measured on the first 0.41 build of this fork.
+ *
+ * That is not cosmetic. A React Native app routinely loads other media
+ * libraries that link their own FFmpeg, and a leaked `av_*` set turns the
+ * dynamic linker into a coin toss over whose FFmpeg a call binds to — the exact
+ * class of collision this project chose libmpv to avoid.
+ *
+ * `mpv_*` covers the whole public client API and our one added export,
+ * `mpv_lavc_set_java_vm` (patches/mpv/002).
+ */
+{
+	global:
+		mpv_*;
+	local:
+		*;
+};
