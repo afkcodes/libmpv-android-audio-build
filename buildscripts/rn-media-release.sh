@@ -40,8 +40,11 @@ OUT="$PWD/rn-media-release"
 # Strings that must be present in every shipped .so. Add one line per feature
 # the fork's patches introduce; each must be emitted ONLY by the patched code.
 REQUIRED_STRINGS=(
-    '[rn-media] pcm-tap window='   # patches/mpv/004.rn_media_pcm_tap.patch
-    'pcm-tap-frame'                # the property table entry itself
+    '[rn-media] pcm-tap window='          # patches/mpv/004.rn_media_pcm_tap.patch
+    'pcm-tap-frame'                       # the property table entry itself
+    '[rn-media] prefetch hook resolved: ' # patches/mpv/006.rn_media_prefetch_hook.patch
+    'on_prefetch_load'                    # the hook name the client registers
+    'prefetch-playlist-entry-id'          # the property table entry itself
 )
 
 if [ -z "$NDK_STRIP" ]; then

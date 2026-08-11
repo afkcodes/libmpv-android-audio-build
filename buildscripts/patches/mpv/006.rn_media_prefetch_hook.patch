@@ -1,0 +1,459 @@
+rn-media: run a client hook on the prefetch path (hook `on_prefetch_load`)
+
+WHY THIS EXISTS
+    mpv's `--prefetch-playlist` opens the next playlist entry while the
+    current one is still playing, and it opens the entry's RAW filename:
+    prefetch_next() (player/loadfile.c) calls start_open() directly and never
+    touches the hook pipeline.  process_hooks() has exactly six call sites in
+    that file — on_before_start_file, on_load, on_load_fail, on_preloaded,
+    on_unload, on_after_end_file — and all six are inside play_current_file()
+    or the terminate path.  None is reachable from prefetch_next().
+
+    So a client that resolves URLs in `on_load` (custom scheme -> signed CDN
+    URL, plex-transcode:// -> HLS, our own resolver) never sees the prefetched
+    entry, and the prefetch reaches the stream layer with an unresolvable URL.
+
+    Worse than "no hook": the prefetch is then THROWN AWAY at the boundary.
+    open_demux_reentrant() (loadfile.c:1218-1246 in 0.41.0) decides whether
+    the in-flight open can be reused by a byte-exact strcmp of mpctx->open_url
+    (the raw filename) against mpctx->stream_open_filename (the post-on_load,
+    rewritten value).  For any resolver that actually rewrites, that compare
+    fails, cancel_open() runs — mp_thread_join() on the doomed opener thread,
+    on the core thread, AT the transition — and a cold synchronous open
+    follows.  `prefetch-playlist=yes` plus a URL-rewriting resolver is
+    therefore measurably WORSE than prefetch off, which is the opposite of
+    what the option is for.
+
+    Upstream documents this as intentional and permanent.  DOCS/man/options.rst
+    (v0.41.0, lines 4312-4313, under --prefetch-playlist at 4307):
+
+        This does not work with URLs resolved by the ``youtube-dl`` wrapper,
+        and it won't.
+
+    ytdl_hook.lua is an `on_load` hook, so that sentence is upstream's refusal
+    of exactly this feature.  There is no option, no build flag and no client
+    API that turns it on: verified against every mpv release from v0.33.0
+    through v0.41.0 and current master — prefetch_next() is byte-identical in
+    v0.40.0, v0.41.0 and master, and no version in that range ever calls
+    process_hooks().  A fork patch is the only route.
+
+    rn-media needs it because our queue is a network queue: gapless playback
+    across a CDN boundary is what `prefetch-playlist` buys us (measured on
+    device: 25 ms handover with it, 644 ms and an underrun without), and
+    resolved/expiring URLs are what a real audio app has.  Without this patch
+    those two features are mutually exclusive.
+
+PROVENANCE
+    The idea and the tap point — run the hook pipeline inside prefetch_next()
+    and re-read stream-open-filename afterwards — follow
+    ales-drnz/libmpv-scripts (BSD-3-Clause), `patches/mpv/shared/
+    patch_prefetch_hook.py`, the patch set behind the Flutter package
+    `mpv_audio_kit`.  That is the only shipped precedent for hooks on mpv's
+    prefetch path, and it targets mpv 0.41.0 exactly.
+
+    This implementation is written from scratch and differs from it in five
+    deliberate ways, each fixing a defect found while reviewing it against the
+    0.41.0 source.  They are listed under "WHAT WE DO DIFFERENTLY" below
+    because they are the reason this file exists rather than a vendored copy.
+
+APPLIES TO
+    mpv 0.41.0.  New at this version; there is no earlier rn-media revision of
+    this patch.
+
+WHAT IT ADDS
+    hook `on_prefetch_load`
+                    Fired from prefetch_next() immediately before the
+                    prefetch open, once per prefetched entry.  Register with
+                    the ordinary client API (mpv_hook_add / MPV_EVENT_HOOK /
+                    mpv_hook_continue) — no new export, no ABI change; the
+                    export set of the shipped binary is unchanged (55 names,
+                    see include/mpv.ver).
+
+                    While it is open, `stream-open-filename` reads the
+                    prefetched entry's URL and may be WRITTEN to resolve it.
+                    Everything else — `path`, `duration`, `playlist-current-pos`,
+                    every demuxer-derived property — still describes the
+                    CURRENTLY PLAYING track, which is still playing.
+
+    `prefetch-playlist-entry-id`
+                    int64, read-only.  playlist_entry.id of the entry being
+                    prefetched.  M_PROPERTY_UNAVAILABLE outside the hook,
+                    because outside the hook the value would be stale.  This
+                    is the hook's missing payload: mpv_event_hook carries only
+                    {name, id}, MPV_EVENT_START_FILE has NOT been sent for a
+                    prefetched entry, and playlist-current-pos still points at
+                    the playing track — so without this property the only key
+                    a resolver has for the entry it is being asked about is the
+                    URL string it was handed.
+
+    Presence in a shipped artifact is proved by the string
+    "[rn-media] prefetch hook resolved: " (player/loadfile.c), which nothing
+    else in the tree emits; buildscripts/rn-media-release.sh asserts it
+    against the stripped .so.
+
+HOW IT WORKS
+    prefetch_next() snapshots the next entry's url / stream_flags / id, points
+    mpctx->stream_open_filename at its own copy of the url, sets
+    mpctx->in_prefetch_hook, runs process_hooks("on_prefetch_load"), reads the
+    (possibly rewritten) value back, restores the field, and calls start_open()
+    with whatever came out.
+
+    If the client rewrote the URL, the opener now works on the RESOLVED url —
+    which is also what the play-time `on_load` will produce for the same entry,
+    so open_demux_reentrant()'s strcmp succeeds at the boundary and the
+    prefetched demuxer is actually reused.  That reuse is the entire point.
+
+    If the client did not rewrite, or no client registered the hook at all,
+    the function does what unpatched mpv does, with the same arguments.
+
+THREADING AND COST
+    Core thread only, from the single call site handle_update_cache() ->
+    prefetch_next().  process_hooks() is a blocking pump (mp_hook_start, then
+    mp_idle() until completion), so a client holds the core for as long as it
+    takes to answer — no decode, no AO refill, audio continues only out of the
+    AO queue (order 0.2-0.8 s on our measured device).  That budget is the
+    client's problem, and it is a HARDER problem here than at `on_load`,
+    because prefetch fires mid-track over live audio rather than between
+    tracks: handle_update_cache() calls prefetch_next() on the first poll
+    after the current file is fully read, which for a normal audio file is
+    seconds after playback started, not seconds before the boundary.  A client
+    that cannot answer from cache synchronously must continue the hook
+    unchanged and resolve later.
+
+    With no client registered the added cost is one mp_hook_exists() call — a
+    walk of the (usually empty) hook array — and nothing else.  The URL is
+    borrowed from the playlist entry and only copied inside the hook block, so
+    that path allocates nothing, swaps nothing, and hands start_open() exactly
+    the arguments upstream hands it.  (mp_hook_start() on an unregistered name
+    would already be harmless — run_next_hook_handler() finds no match and
+    mp_hook_test_completion() then returns true without ever entering the
+    mp_idle() loop — but it still walks the list and wakes the core, and it
+    would force the copy.)
+
+WHAT WE DO DIFFERENTLY (and why)
+    1. A distinct hook name, `on_prefetch_load`, not `on_load`.
+       The prior art fires `on_load` and does not remove the play-time
+       process_hooks(mpctx, "on_load") at loadfile.c:1725, so the same
+       semantic hook fires twice per entry with nothing in the payload to tell
+       the passes apart.  They are genuinely different phases: this one runs
+       mid-track and the entry may never play (the queue can be edited, and
+       upstream's own manual disclaims prefetch correctness when it is).  A
+       separate name lets a client resolve at prefetch time and answer the
+       play-time on_load from cache — which it MUST do, because if the second
+       pass returns a different string (a fresh nonce, a new signature) the
+       strcmp fails and the prefetch is discarded after all.
+
+    2. No NULL-mask of mpctx->demuxer.
+       mp_property_stream_open_filename()'s setter refuses writes while a
+       demuxer is attached (player/command.c).  At `on_load` time that is
+       always NULL (play_current_file() asserts it); during prefetch the
+       PLAYING track's demuxer is very much alive, so the prior art sets
+       mpctx->demuxer = NULL around the hook and restores it after.
+       That is a ~50-site blast radius: `grep -c "mpctx->demuxer"
+       player/command.c` is 50, and for the length of the hook every
+       demuxer-derived property of the playing track — duration, file-size,
+       seekable, is-network, metadata, chapters, demuxer-cache-*, track-list —
+       reads as unavailable to any client that happens to look.  Our event
+       thread and media-session layer read exactly those.  It also silently
+       suppresses underrun detection for the playing track, because
+       handle_update_cache() calls clear_underruns() BEFORE its
+       `if (!mpctx->demuxer) return;` — i.e. the dropout this design risks
+       becomes invisible to mpv's own buffering logic for precisely the window
+       in which it is most likely.
+       Instead: one bool on MPContext, one extra condition in that one setter.
+       The other 49 sites are untouched and the playing track's state is not
+       modified at all.
+
+    3. The re-entry guard lives on MPContext, not in a file-static.
+       A guard is required: process_hooks() -> mp_idle() ->
+       handle_update_cache() -> prefetch_next() is a real cycle, and
+       mpctx->open_active is still false at that point (start_open() has not
+       run yet), so the existing early-return does not break it.  The prior
+       art uses a function-scope `static bool`, which is process-global.  It
+       happens to be safe for the recursion it guards, but rn-media runs
+       several mpv cores in one process by design, so the honest scope is the
+       core.  We reuse in_prefetch_hook itself — it is set for exactly the
+       window that needs guarding.
+
+    4. The entry's identity is exposed (`prefetch-playlist-entry-id`).
+       See "WHAT IT ADDS".  The prior art keys its resolver table off the URL
+       string, which is all that is available to it — and mp_normalize_path()
+       in the property GETTER makes that key fragile for anything that is not
+       a URL (a relative local path comes back absolute).
+
+    5. Nothing reads the playlist entry after the hook.
+       url, stream_flags and id are snapshotted BEFORE process_hooks(), and
+       the entry pointer is nulled at that point.  The prior art reads new_entry->stream_flags
+       AFTER the hook has returned; a client that runs playlist-remove while
+       the hook is open frees that entry (common/playlist.c: playlist_remove()
+       -> playlist_entry_unref(), which deallocates at reserved == 0), so that
+       read is a use-after-free reachable from the client API.
+       We also re-check mpctx->stop_play and mpctx->open_active after the
+       hook, since the core kept servicing commands throughout.
+
+    Not changed, and worth stating: the setter does not fire
+    mp_notify_property() during the prefetch hook.  The swap is reverted before
+    the hook returns, so the playing track's stream-open-filename never
+    actually changed; notifying would leave every observer of that property
+    holding the prefetch URL permanently, because the restore is a plain
+    assignment (and so is play_current_file()'s own at loadfile.c:1686).
+
+REBASING
+    Four files, no build-system files.  The anchors to re-check after a
+    version bump are:
+      player/loadfile.c   prefetch_next()'s body — the whole function is
+                          rewritten by this patch.  Byte-identical upstream in
+                          v0.40.0, v0.41.0 and master; the last real change
+                          was v0.39 -> v0.40, which moved the
+                          `!mpctx->open_active` test into the early return.
+                          Also depends on process_hooks() still being a
+                          blocking pump and on start_open() still copying its
+                          `url` argument (talloc_strdup at loadfile.c:1202) —
+                          if it ever borrowed it instead, the talloc_free()
+                          after the call becomes a use-after-free.
+      player/core.h       struct MPContext, the block around
+                          `char *stream_open_filename;`.
+      player/command.c    mp_hook_start()'s body (mp_hook_exists() goes
+                          immediately after it), mp_property_stream_open_filename()'s
+                          M_PROPERTY_SET arm, and the {"stream-open-filename", ...}
+                          property-table row, which the new row follows.
+      player/command.h    the mp_hook_* declaration block.
+    Independent of patch 004 (audio/out/*, common/global.h, and command.c's
+    AUDIO property region ~1900 and the {"audio-out-params", ...} row) and of
+    002/003 (include/mpv/client.h, player/client.c, meson.build, sub/*).  The
+    two command.c patches touch different regions of the same file and apply
+    in numeric order.
+    If upstream ever adds hooks to the prefetch path itself, drop this patch
+    and keep only the property — but check the name it chose first.
+
+diff --git a/player/loadfile.c b/player/loadfile.c
+--- a/player/loadfile.c
++++ b/player/loadfile.c
+@@ -1278,11 +1278,93 @@
+     if (!mpctx->opts->prefetch_open || mpctx->open_active)
+         return;
+ 
++    // rn-media: re-entry guard. The hook below pumps mp_idle(), which calls
++    // handle_update_cache(), which is the one caller of this function — and
++    // mpctx->open_active is still false at that point, so the test above does
++    // not catch it. On MPContext rather than in a file-static because one
++    // process runs several mpv cores.
++    if (mpctx->in_prefetch_hook)
++        return;
++
+     struct playlist_entry *new_entry = mp_next_file(mpctx, +1, false, false);
+-    if (new_entry && new_entry->filename) {
+-        MP_VERBOSE(mpctx, "Prefetching: %s\n", new_entry->filename);
+-        start_open(mpctx, new_entry->filename, new_entry->stream_flags, true);
++    if (!new_entry || !new_entry->filename)
++        return;
++
++    MP_VERBOSE(mpctx, "Prefetching: %s\n", new_entry->filename);
++
++    // rn-media: `url` is borrowed from the entry until the hook block takes a
++    // copy, so with no hook registered nothing is allocated and the start_open()
++    // at the bottom receives exactly what upstream passes it.
++    char *url = new_entry->filename;
++    int stream_flags = new_entry->stream_flags;
++    char *owned = NULL;         // our copy of the URL; NULL unless we hook
++    bool resolved = false;
++
++    // rn-media: upstream never runs hooks here (DOCS/man/options.rst on
++    // --prefetch-playlist: "This does not work with URLs resolved by the
++    // youtube-dl wrapper, and it won't"), so a client that resolves URLs in
++    // on_load sees the prefetch reach the stream layer unresolved — and the
++    // prefetch is then thrown away at the boundary anyway, because
++    // open_demux_reentrant() compares mpctx->open_url against the post-on_load
++    // stream_open_filename byte-for-byte. A separate hook name and not
++    // "on_load": these are different phases (this one runs mid-track, and the
++    // entry may never play), and reusing the name would fire the same semantic
++    // hook twice per entry with no way for the client to tell them apart.
++    if (mp_hook_exists(mpctx, "on_prefetch_load") &&
++        mpctx->playing && mpctx->stream_open_filename)
++    {
++        // Snapshot HERE and stop looking at the entry: the hook re-enters the
++        // core, so a client can playlist-remove it and free it while the hook
++        // is open (common/playlist.c: playlist_remove -> playlist_entry_unref).
++        // `owned` is a talloc ROOT, because the stream-open-filename setter
++        // allocates the rewritten string as a child of whatever the field
++        // points at.
++        uint64_t entry_id = new_entry->id;
++        owned = talloc_strdup(NULL, new_entry->filename);
++        url = owned;
++        new_entry = NULL;
++
++        char *saved = mpctx->stream_open_filename;
++        // Only this one field is swapped. mpctx->filename, mpctx->playing and
++        // mpctx->demuxer keep describing the PLAYING track, which is still
++        // playing and is what a client reading `path` or `duration` means.
++        mpctx->stream_open_filename = owned;
++        mpctx->prefetch_entry_id = entry_id;
++        mpctx->in_prefetch_hook = true;
++
++        process_hooks(mpctx, "on_prefetch_load");
++
++        // Read back before the restore: the setter made the rewritten string a
++        // child of `owned`, so it dies with the talloc_free() below.
++        resolved = strcmp(mpctx->stream_open_filename, owned) != 0;
++        if (resolved) {
++            char *new_url = talloc_strdup(NULL, mpctx->stream_open_filename);
++            talloc_free(owned);
++            owned = url = new_url;
++        }
++
++        mpctx->in_prefetch_hook = false;
++        mpctx->prefetch_entry_id = 0;
++        mpctx->stream_open_filename = saved;
++
++        // A hook blocks the core for as long as the client wants it to, and the
++        // core kept servicing commands while it did: playback may be ending,
++        // and a load command may already have claimed the opener thread.
++        if (mpctx->stop_play || mpctx->open_active) {
++            talloc_free(owned);
++            return;
++        }
++
++        if (resolved)
++            MP_VERBOSE(mpctx, "[rn-media] prefetch hook resolved: %s\n", url);
+     }
++
++    // Unresolved, this is exactly what upstream does, with the same arguments.
++    // Resolved, the URL handed to the opener is the one the play-time on_load
++    // will also produce, which is what makes open_demux_reentrant()'s strcmp
++    // succeed and the prefetched demuxer actually get reused.
++    start_open(mpctx, url, stream_flags, true);
++    talloc_free(owned);         // ta_free() is a no-op on NULL
+ }
+ 
+ static void clear_playlist_paths(struct MPContext *mpctx)
+diff --git a/player/core.h b/player/core.h
+--- a/player/core.h
++++ b/player/core.h
+@@ -280,6 +280,23 @@
+     struct playlist_entry *playing; // currently playing file
+     char *filename; // immutable copy of playing->filename (or NULL)
+     char *stream_open_filename;
++    // rn-media: true only while the "on_prefetch_load" hook runs inside
++    // prefetch_next() (player/loadfile.c). One flag, three jobs, because they
++    // cover exactly the same window:
++    //   - re-entry guard: the hook pumps mp_idle(), which reaches
++    //     handle_update_cache(), which calls prefetch_next() again;
++    //   - it lets mp_property_stream_open_filename() accept a write while the
++    //     CURRENTLY PLAYING track's demuxer is attached, without touching that
++    //     demuxer or any other state of the playing track (player/command.c);
++    //   - it gates prefetch_entry_id below.
++    // MPContext-scoped and not a file-static: one process runs several cores.
++    // Core thread only.
++    bool in_prefetch_hook;
++    // rn-media: playlist_entry.id of the entry being prefetched; valid only
++    // while in_prefetch_hook, 0 otherwise (ids start at 1). Exposed read-only
++    // as `prefetch-playlist-entry-id`, because the hook event carries no entry
++    // information and playlist-current-pos still points at the playing track.
++    uint64_t prefetch_entry_id;
+     char **playlist_paths; // used strictly for playlist validation
+     int playlist_paths_len;
+     enum stop_play_reason stop_play;
+diff --git a/player/command.c b/player/command.c
+--- a/player/command.c
++++ b/player/command.c
+@@ -262,6 +262,21 @@
+     run_next_hook_handler(mpctx, type, 0);
+ }
+ 
++// rn-media: true if any client registered a handler for `type`. mp_hook_start()
++// on an unregistered name is already harmless, but it still walks the list and
++// wakes the core; prefetch_next() uses this to skip the whole hook block —
++// including its allocation and its swap of stream_open_filename — so a build
++// with nobody listening behaves exactly like unpatched mpv.
++bool mp_hook_exists(struct MPContext *mpctx, const char *type)
++{
++    struct command_ctx *cmd = mpctx->command_ctx;
++    for (int n = 0; n < cmd->num_hooks; n++) {
++        if (strcmp(cmd->hooks[n]->type, type) == 0)
++            return true;
++    }
++    return false;
++}
++
+ int mp_hook_continue(struct MPContext *mpctx, int64_t client_id, uint64_t id)
+ {
+     struct command_ctx *cmd = mpctx->command_ctx;
+@@ -553,11 +568,30 @@
+         return M_PROPERTY_UNAVAILABLE;
+     switch (action) {
+     case M_PROPERTY_SET: {
+-        if (mpctx->demuxer)
++        // rn-media: the demuxer test rejects a write that could not take
++        // effect — on the normal path this property is only meaningful between
++        // "on_load" and the open, where play_current_file() asserts
++        // mpctx->demuxer == NULL. The "on_prefetch_load" hook runs mid-playback
++        // (player/loadfile.c, prefetch_next), where the CURRENTLY PLAYING
++        // track's demuxer is legitimately attached and is not what is about to
++        // be opened; the write is meaningful there, so allow it. This is the
++        // whole reason in_prefetch_hook exists: the alternative — NULL-masking
++        // mpctx->demuxer around the hook — would make ~50 other properties of
++        // the playing track read as unavailable and would suppress its underrun
++        // detection (handle_update_cache clears underruns and early-returns on
++        // a NULL demuxer) for the length of the hook.
++        if (mpctx->demuxer && !mpctx->in_prefetch_hook)
+             return M_PROPERTY_ERROR;
+         mpctx->stream_open_filename =
+             talloc_strdup(mpctx->stream_open_filename, *(char **)arg);
+-        mp_notify_property(mpctx, prop->name);
++        // Deliberately silent during the prefetch hook: prefetch_next() points
++        // this field at the NEXT entry's URL for the length of the hook and
++        // restores it afterwards, so the value an observer cares about — the
++        // playing track's — never changes. Notifying would leave every observer
++        // holding the prefetch URL forever, since the restore cannot notify
++        // back without also announcing a change that never happened.
++        if (!mpctx->in_prefetch_hook)
++            mp_notify_property(mpctx, prop->name);
+         return M_PROPERTY_OK;
+     }
+     case M_PROPERTY_GET_TYPE:
+@@ -571,6 +605,24 @@
+     return M_PROPERTY_NOT_IMPLEMENTED;
+ }
+ 
++// rn-media: playlist_entry.id of the entry being prefetched, readable only
++// while the "on_prefetch_load" hook is running (player/loadfile.c).
++// Unavailable at every other time, because the value would be stale: it is the
++// hook's missing payload, not a piece of player state.
++//
++// Why it has to exist: mpv_event_hook carries only {name, id}, MPV_EVENT_START_FILE
++// has not been sent for a prefetched entry, and mpctx->playing /
++// playlist-current-pos still refer to the playing track. Without this the only
++// key a resolver has for the entry it is being asked about is the URL string.
++static int mp_property_prefetch_playlist_entry_id(void *ctx, struct m_property *prop,
++                                                  int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    if (!mpctx->in_prefetch_hook || !mpctx->prefetch_entry_id)
++        return M_PROPERTY_UNAVAILABLE;
++    return m_property_int64_ro(action, arg, mpctx->prefetch_entry_id);
++}
++
+ static int mp_property_file_size(void *ctx, struct m_property *prop,
+                                  int action, void *arg)
+ {
+@@ -4424,6 +4476,7 @@
+     {"display-sync-active", mp_property_display_sync_active},
+     {"filename", mp_property_filename},
+     {"stream-open-filename", mp_property_stream_open_filename},
++    {"prefetch-playlist-entry-id", mp_property_prefetch_playlist_entry_id},
+     {"file-size", mp_property_file_size},
+     {"path", mp_property_path},
+     {"media-title", mp_property_media_title},
+diff --git a/player/command.h b/player/command.h
+--- a/player/command.h
++++ b/player/command.h
+@@ -120,6 +120,9 @@
+ 
+ bool mp_hook_test_completion(struct MPContext *mpctx, char *type);
+ void mp_hook_start(struct MPContext *mpctx, char *type);
++// rn-media: true if any client registered a handler for this hook name. Lets a
++// caller skip the setup around a hook that nobody is listening to.
++bool mp_hook_exists(struct MPContext *mpctx, const char *type);
+ int mp_hook_continue(struct MPContext *mpctx, int64_t client_id, uint64_t id);
+ void mp_hook_add(struct MPContext *mpctx, char *client, int64_t client_id,
+                  const char *name, uint64_t user_id, int pri);
