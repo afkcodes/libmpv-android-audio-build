@@ -82,6 +82,24 @@ unset CC CXX
 # --exclude-libs=ALL below still applies: libiconv is linked statically and its
 # symbols stay out of .dynsym, so this adds a capability and not an export.
 iconv_cflags="-I$prefix_dir/include"
+# ...and LIBRARY_PATH, which is the part that actually makes meson find it.
+#
+# -L alone is not enough. mpv asks for iconv with dependency('iconv'), and with
+# -Dprefer_static=true meson's find_library does not run a `-liconv` link test:
+# it SEARCHES the compiler's own library directories for libiconv.a. Those come
+# from `clang -print-search-dirs`, which -L does not contribute to and
+# LIBRARY_PATH does. Without this, meson reports
+#   Run-time dependency iconv found: NO (tried builtin and system)
+# even with libiconv.a sitting in $prefix_dir/lib and -L pointing at it.
+#
+# The builtin half of that check can never pass here regardless: GNU libiconv's
+# header macro-renames iconv_open to libiconv_open, so meson's probe fails to
+# link against bionic and falls through to the system half, which is the one
+# this fixes.
+#
+# build.sh's loadarch() unsets LIBRARY_PATH for every arch, so this is set here,
+# per-arch, and does not leak between them.
+export LIBRARY_PATH="$prefix_dir/lib"
 ldflags="$LDFLAGS -L$prefix_dir/lib -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
 
 # EXHAUSTIVE OPTION LIST (rn-media parity release, #32).
