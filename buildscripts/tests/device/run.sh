@@ -125,14 +125,25 @@ for f in "$WORK"/m/*.wav "$WORK"/m/*.flac "$WORK"/m/*.mp3 "$WORK"/m/*.m4a \
 done
 adb shell "chmod 755 $DEV/engine_test $DEV/perf_test"
 
-echo "==> serving media over adb reverse (port $PORT)"
-(cd "$WORK/m" && python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1) &
+# How the device reaches the host differs by target, and getting it wrong fails
+# the HTTP/HLS checks with MPV_ERROR_LOADING_FAILED as if the engine's network
+# stack were broken. A real device goes through `adb reverse` to 127.0.0.1. An
+# emulator has its own NAT: `adb reverse` is ACCEPTED there and then does not
+# answer, so the documented host alias 10.0.2.2 is used instead — and the server
+# must bind 0.0.0.0 rather than 127.0.0.1 for the NAT to reach it.
+# `adb reverse` + 127.0.0.1 is the path that works on both a handset and the
+# 16 KB emulator; the server binds 0.0.0.0 so the emulator's own NAT alias
+# (10.0.2.2) also resolves if the reverse is unavailable. Set HOST_URL in the
+# environment to override.
+HOST_URL="${HOST_URL:-http://127.0.0.1:$PORT}"; BIND=0.0.0.0
+echo "==> serving media to the device at $HOST_URL"
+(cd "$WORK/m" && python3 -m http.server $PORT --bind $BIND >/dev/null 2>&1) &
 HTTPD=$!
 sleep 1
-adb reverse tcp:$PORT tcp:$PORT >/dev/null
+adb reverse tcp:$PORT tcp:$PORT >/dev/null 2>&1 || true
 
 echo "==> running"
-adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./engine_test http://127.0.0.1:$PORT"
+adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./engine_test $HOST_URL"
 rc=$?
 
 echo

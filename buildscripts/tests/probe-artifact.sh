@@ -112,11 +112,23 @@ echo "-- 7. iconv alias table (vendored GNU libiconv, --enable-extra-encodings) 
 for a in SHIFT_JIS WINDOWS-1251 ISO-8859-1 EUC-KR BIG5 CP932 KOI8-R GB18030; do
   has "$a" && pass "iconv alias: $a" || fail "iconv alias: $a"
 done
-$N/llvm-nm "$US" 2>/dev/null | grep -q ' [tT] libiconv_open$' && pass "iconv: libiconv_open linked in" || fail "iconv: libiconv_open missing"
+# Strip-survivable evidence only. These four checks used to read the SYMBOL
+# TABLE of the "unstripped" copy, which works when this script is pointed at
+# prefix/ but silently fails when it is pointed at a SHIPPED artifact — the
+# exact thing it claims to probe. Caught by running it against the .so inside
+# a release jar. Now everything here reads .rodata or .dynsym, both of which
+# survive --strip-all, so the script is honest for either input.
+for a in ISO-2022-JP-2 EUC-JISX0213 GEORGIAN-ACADEMY CP1258; do
+  has "$a" && pass "iconv: extra-encodings table entry $a" || fail "iconv: $a missing (--enable-extra-encodings)"
+done
 
 echo "-- 8. zlib (statically linked from NDK sysroot libz.a) --"
-$N/llvm-nm "$US" 2>/dev/null | grep -q ' [tT] inflate$' && pass "zlib: inflate() linked in" || fail "zlib: inflate() missing"
-$N/llvm-nm "$US" 2>/dev/null | grep -q ' [tT] inflateInit2_$' && pass "zlib: inflateInit2_() linked in" || fail "zlib: inflateInit2_ missing"
+# zlib is linked STATICALLY from the NDK sysroot's libz.a and hidden from
+# .dynsym by --exclude-libs=ALL, so there is no DT_NEEDED and no dynamic
+# symbol to look for. Its inflate error strings are in .rodata and survive.
+for z in 'invalid distance too far back' 'incorrect header check'; do
+  hasf "$z" && pass "zlib: inflate error string present ($z)" || fail "zlib: '$z' missing"
+done
 
 echo "-- 9. engine capabilities --"
 for s in 'audiotrack' 'prefetch-playlist' 'gapless-audio' 'metadata-codepage' \
@@ -124,7 +136,7 @@ for s in 'audiotrack' 'prefetch-playlist' 'gapless-audio' 'metadata-codepage' \
          'replaygain-track-gain' 'audio-out-params' 'cache-secs' 'user-agent'; do
   hasf "$s" && pass "cap: $s" || fail "cap: $s"
 done
-$N/llvm-nm "$US" 2>/dev/null | grep -q ' [tT] mpv_lavc_set_java_vm$' && pass "cap: mpv_lavc_set_java_vm" || fail "cap: mpv_lavc_set_java_vm"
+grep -qx 'mpv_lavc_set_java_vm' "$OUT/exports.txt" && pass "cap: mpv_lavc_set_java_vm exported" || fail "cap: mpv_lavc_set_java_vm not exported"
 
 echo "-- RESULT [$LABEL]: $FAIL failure(s) --"
 exit $FAIL
