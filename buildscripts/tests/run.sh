@@ -45,7 +45,9 @@ echo "==> building native libmpv"
 # Mirrors scripts/mpv.sh's feature set as closely as a host build can, minus the
 # cross file and the Android AO, so what is tested is the configuration we ship.
 if [ ! -f $BUILD/build.ninja ]; then
-    meson setup $BUILD \
+    # Both directories, in that order: we are not standing in mpv's source
+    # tree, and with a single argument meson would read it as the SOURCE dir.
+    meson setup $BUILD deps/mpv \
         -Dlibmpv=true \
         -Dcplayer=false \
         -Dgpl=false \
