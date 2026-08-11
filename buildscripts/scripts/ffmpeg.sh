@@ -240,7 +240,16 @@ cpuflags=
 	--disable-audiotoolbox \
 	\
 	--enable-small \
-	--enable-hwaccels \
+	`# --disable-hwaccels, was --enable-hwaccels (rn-media #30). Worth ZERO` \
+	`# bytes either way and that is the point: every hwaccel in FFmpeg 8.1.2` \
+	`# needs one of dxva2 / vaapi / vdpau / videotoolbox / mediacodec /` \
+	`# vulkan / d3d11va / nvdec, and this script disables all of them, so` \
+	`# the built tree has CONFIG_*_HWACCEL 1 exactly 0 times (counted in` \
+	`# _build-arm64/config_components.h). It was the same class of dead flag` \
+	`# as the three the parity release deleted -- asking for something this` \
+	`# build cannot have -- and it read like a capability in the recorded` \
+	`# configure line. Stated in the negative so it stays a decision.` \
+	--disable-hwaccels \
 	--enable-optimizations \
 	--enable-runtime-cpudetect \
 	\
@@ -334,8 +343,19 @@ cpuflags=
 	--enable-parser=vorbis \
   	--enable-parser=dca \
 	\
-	--enable-filter=overlay \
-	\
+	`# NOTE: --enable-filter=overlay is GONE (rn-media #30, size).` \
+	`# overlay is a VIDEO filter: it composites one video frame onto` \
+	`# another. It predates every audio flag in this list -- it is one of` \
+	`# the two entries the upstream flavour script shipped ("the allow-list` \
+	`# below held exactly two entries -- overlay (video) and equalizer"),` \
+	`# so it was inherited, never chosen. In an engine that runs vid=no /` \
+	`# vo=null there is no video frame for it to composite onto and no` \
+	`# filter graph that can instantiate it: mpv reaches libavfilter only` \
+	`# through filters/f_lavfi.c, and the audio graph rejects a video` \
+	`# filter at format negotiation. Cost measured on arm64: vf_overlay.o` \
+	`# 50,080 B plus the two objects only it pulls, framesync.o 3,956 and` \
+	`# drawutils.o 6,956 (linker --why-extract, not guesswork).` \
+	`# The 17 AUDIO filters below are untouched.` \
 	--enable-filter=aresample \
 	--enable-filter=aformat \
 	--enable-filter=anull \
