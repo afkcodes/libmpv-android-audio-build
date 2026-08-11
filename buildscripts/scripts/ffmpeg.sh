@@ -203,7 +203,15 @@ cpuflags=
 ../configure \
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config --nm=llvm-nm \
-	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib" \
+	`# -ffunction-sections -fdata-sections (rn-media #30, size): give the` \
+	`# linker per-function granularity inside FFmpeg's archives too. Without` \
+	`# it a .a member is all-or-nothing, and FFmpeg's members are coarse --` \
+	`# mpegaudiodec_common.o is 189,224 allocated bytes pulled in for a` \
+	`# handful of tables. mpv's link adds -Wl,--gc-sections (scripts/mpv.sh)` \
+	`# and drops the rest. Worth -275,880 B on arm64 ON TOP OF the same flags` \
+	`# applied to mpv alone. No semantic change: the linker removes only what` \
+	`# has no reference from a root, and the roots are the same 55 exports.` \
+	--extra-cflags="-I$prefix_dir/include $cpuflags -ffunction-sections -fdata-sections" --extra-ldflags="-L$prefix_dir/lib" \
 	\
 	--disable-gpl \
 	--disable-nonfree \

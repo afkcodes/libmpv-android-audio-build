@@ -81,7 +81,25 @@ unset CC CXX
 #
 # --exclude-libs=ALL below still applies: libiconv is linked statically and its
 # symbols stay out of .dynsym, so this adds a capability and not an export.
-iconv_cflags="-I$prefix_dir/include"
+# rn-media #30 (size). -ffunction-sections/-fdata-sections gives the LINKER
+# per-function granularity inside every mpv object; --gc-sections below then
+# drops what nothing references. This is not a heuristic — it removes only
+# code with no path from a GC root (the 55 exported mpv_* symbols plus the
+# init arrays), and the proof that it is finding real dead code rather than
+# shaving noise is in the UNDEFINED symbols that disappear with it:
+#     regcomp/regexec/regfree   sub/filter_regex.c (a SUBTITLE filter; 003
+#                               removed the chain that referenced it, so
+#                               sd_filter_regex has had no caller since)
+#     ANativeWindow_*           video/out/android_common.c (video surface)
+#     ppoll                     osdep/poll_wrapper.c — mp_poll()'s only
+#                               callers in 0.41 are clipboard-wayland,
+#                               clipboard-x11, dvb_tune, stream_dvb and
+#                               drm_common, none of them built here
+#     j1                        video/out/filter_kernels.c (scaler windows)
+# Each of those is a whole subsystem 007 did not reach. Measured alone on
+# arm64: -89,648 B.
+mpv_size_cflags="-ffunction-sections -fdata-sections"
+iconv_cflags="-I$prefix_dir/include $mpv_size_cflags"
 # ...and libiconv is handed to the linker EXPLICITLY, which is the part that
 # actually makes mpv's dependency('iconv') resolve.
 #
@@ -106,7 +124,14 @@ iconv_cflags="-I$prefix_dir/include"
 # --exclude-libs=ALL below still applies to it, so libiconv's symbols stay out
 # of .dynsym: this adds a capability, not an export.
 iconv_ldflags="-L$prefix_dir/lib -Wl,-l:libiconv.a"
-ldflags="$LDFLAGS $iconv_ldflags -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
+# --gc-sections is the other half of -ffunction-sections above. Verified not
+# to disturb the two things this link already guarantees: the version script
+# still yields exactly 55 mpv_* exports (GC roots, so they anchor everything
+# reachable), and -Wl,-z,max-page-size=16384 still produces LOAD segments
+# aligned to 0x4000 — both asserted on the STRIPPED artifact, not the log.
+# It composes with the pre-existing -Wl,-O1,--icf=safe rather than replacing
+# it: ICF folds identical survivors, GC deletes non-survivors.
+ldflags="$LDFLAGS $iconv_ldflags -Wl,--gc-sections -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
 
 # EXHAUSTIVE OPTION LIST (rn-media parity release, #32).
 #
@@ -126,7 +151,19 @@ ldflags="$LDFLAGS $iconv_ldflags -Wl,--exclude-libs=ALL -Wl,--version-script=$PW
 # now state every option explicitly, which means `workshop dry-run` can diff a
 # candidate mpv's meson options against what we pass and flag anything new.
 
+# -Doptimization=s (rn-media #30). The crossfile says buildtype = 'release',
+# which is meson's -O3, and -O3 on mpv's OWN code buys nothing measurable
+# here: none of the DSP is in this tree. Every hot loop — decode, resample,
+# every one of the 17 audio filters — lives in FFmpeg, which is a separate
+# build already compiled -Os by --enable-small, and is NOT touched by this
+# option. What -O3 was inflating was the player loop, the property system,
+# the demuxer glue and the option parser. -Os on those: -183,728 B on arm64,
+# measured alone. THIS IS THE ONE FLAG IN THIS FILE WITH A PERFORMANCE
+# STORY, and the story is "no DSP is affected" rather than "we measured the
+# audio path on a device" — see the experiment report; device verification
+# is a precondition for shipping it.
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
+	-Doptimization=s \
 	--default-library shared \
 	-Dprefer_static=true \
 	-Dc_args="$iconv_cflags" \
