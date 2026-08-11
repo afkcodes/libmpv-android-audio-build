@@ -22,7 +22,13 @@ v_mbedtls=3.6.7
 # artifact links an XML parser nothing can reach. Dropping it would shrink the
 # binary and remove attack surface; it is not folded in here because it changes
 # what ships rather than aligning it.
-v_libxml2=2.15.3
+v_libxml2=2.15.3   # UNUSED as of the parity release -- kept only as a record; see below
+# GNU libiconv, Android-only. Apple's libc has iconv; bionic did not until API
+# 28 and this fork builds at API 21, so mpv's iconv feature was unavailable
+# here and available on iOS. Rather than turn it off on iOS to match, we bring
+# our own -- static, inside libmpv.so, no new DT_NEEDED. 1.19 is the current
+# release (ftp.gnu.org/pub/gnu/libiconv). See scripts/libiconv.sh.
+v_libiconv=1.19
 # FFmpeg 8.1.2 ("Hoare" line, 2026-06-17). The floor is mpv 0.41's own
 # `dependency('libavcodec', version: '>= 60.31.102')` (meson.build:21), i.e.
 # FFmpeg >= 6.1. Deliberately NOT n9.0: that branch was cut 2026-06-26, six
@@ -52,6 +58,12 @@ v_libplacebo=6.338.2
 # I would've used a dict but putting arrays in a dict is not a thing
 
 dep_mbedtls=()
-dep_ffmpeg=(libxml2 mbedtls)
+# libxml2 is GONE from this list as of the parity release. FFmpeg uses it only
+# for the DASH demuxer, and this build does not enable that demuxer, so the
+# shipped artifact was linking an XML parser nothing could reach. The darwin
+# fork only ever built it for its video variant, so removing it here is what
+# makes the two audio artifacts match.
+dep_ffmpeg=(mbedtls)
 dep_libplacebo=()
-dep_mpv=(ffmpeg libplacebo)
+dep_libiconv=()
+dep_mpv=(ffmpeg libplacebo libiconv)

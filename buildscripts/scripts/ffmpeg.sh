@@ -162,6 +162,20 @@ cpuflags=
 # ---------------------------------------------------------------------------
 # rn-media parity release (#32)
 #
+# LIBXML2 REMOVED. FFmpeg uses libxml2 for exactly one thing: the DASH demuxer
+# (libavformat/dashdec.c). This build does not enable that demuxer, so the
+# shipped artifact was linking an XML parser NOTHING could reach -- dead weight
+# and dead attack surface. The darwin fork only ever built libxml2 for its video
+# variant, so removing it here is what makes the two AUDIO artifacts match.
+# Neither platform has DASH; if we ever want it, both get it together, along
+# with libxml2 on both.
+#
+# IMAGE ENCODERS REMOVED (mjpeg, ljpeg, jpegls, jpeg2000, png). This is an audio
+# engine and nothing in rn-media encodes an image; they were inherited from the
+# upstream flavour script and darwin never had them. The DECODERS stay, and
+# darwin gains them in this same release -- decoding cover art is the feature,
+# encoding it was never anything.
+#
 # ITEM 8 -- zlib. `--enable-zlib` is NEW here and was darwin-only before. zlib in
 # libavformat is what decompresses Matroska COMPRESSED TRACK HEADERS, so a .mka
 # using header compression was a candidate for playing on iOS and failing on
@@ -233,8 +247,6 @@ cpuflags=
 	--enable-mbedtls \
 	\
 	--enable-zlib \
-	\
-	--enable-libxml2 \
 	\
 	--enable-avutil \
 	--enable-avcodec \
@@ -362,12 +374,6 @@ cpuflags=
 	--enable-protocol=tcp \
 	--enable-protocol=tls \
 	\
-	--enable-encoder=mjpeg \
-	--enable-encoder=ljpeg \
-	--enable-encoder=jpegls \
-	--enable-encoder=jpeg2000 \
-	--enable-encoder=png \
-	--enable-encoder=jpegls \
 	\
 	--enable-network \
 

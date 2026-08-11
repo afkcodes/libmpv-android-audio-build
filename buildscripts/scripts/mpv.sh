@@ -73,39 +73,134 @@ unset CC CXX
 # runtime crash on new hardware and invisible in every build log.
 ldflags="$LDFLAGS -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
 
+# EXHAUSTIVE OPTION LIST (rn-media parity release, #32).
+#
+# This script used to name 27 options and leave the other ~95 at mpv's own
+# defaults -- and most mpv features default to `auto`, meaning "build me in if
+# my dependency happens to resolve". The only thing keeping them out was the NDK
+# sysroot not happening to satisfy a probe, which is not a decision, it is luck.
+#
+# That is not hypothetical. mpv 0.41 added `avfoundation` with value auto, and
+# its dependency resolves on iOS as well as macOS, so the darwin fork silently
+# built a SECOND audio output into an audio-only engine until someone noticed.
+# The next mpv release can do the same here with any option the NDK satisfies.
+#
+# So the list below is now the same exhaustive one the darwin fork passes, with
+# the platform's own choices on top: audiotrack instead of audiounit, and iconv
+# ENABLED because we now vendor libiconv (see scripts/libiconv.sh). Both forks
+# now state every option explicitly, which means `workshop dry-run` can diff a
+# candidate mpv's meson options against what we pass and flag anything new.
+
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	--default-library shared \
 	-Dprefer_static=true \
 	-Dc_link_args="$ldflags" \
 	-Dcpp_link_args="$ldflags" \
+	\
+	`# What this build IS` \
 	-Dgpl=false \
 	-Dlibmpv=true \
+	-Dbuild-date=true \
 	-Dcplayer=false \
-	-Diconv=disabled \
-	-Dlua=disabled \
-	-Dvulkan=disabled \
-	-Dgl=disabled \
-	-Dplain-gl=disabled \
-	-Degl-android=disabled \
-	-Dandroid-media-ndk=disabled \
-	-Dlibavdevice=disabled \
+	-Dtests=false \
+	-Daudiotrack=enabled \
+	-Diconv=enabled \
+	\
+	-Dfuzzers=false \
+	-Ddisable-packet-pool=false \
+	-Dcdda=disabled \
+	-Dcplugins=disabled \
+	-Ddvbin=disabled \
+	-Ddvdnav=disabled \
 	-Djavascript=disabled \
 	-Dlcms2=disabled \
 	-Dlibarchive=disabled \
+	-Dlibavdevice=disabled \
 	-Dlibbluray=disabled \
-	-Dzimg=disabled \
-	-Djpeg=disabled \
-	-Duchardet=disabled \
+	-Dlua=disabled \
+	-Dpthread-debug=disabled \
 	-Drubberband=disabled \
+	-Dsdl2-gamepad=disabled \
+	-Duchardet=disabled \
+	-Duwp=disabled \
 	-Dvapoursynth=disabled \
-	-Dcplugins=disabled \
+	-Dvector=disabled \
+	-Dwin32-smtc=disabled \
+	-Dwin32-threads=disabled \
+	-Dx11-clipboard=disabled \
+	-Dzimg=disabled \
 	-Dzlib=disabled \
-	-Dtests=false \
-	-Daudiotrack=enabled \
+	-Dalsa=disabled \
+	-Daudiounit=disabled \
+	-Davfoundation=disabled \
 	-Daaudio=disabled \
+	-Dcoreaudio=disabled \
+	-Djack=disabled \
+	-Dopenal=disabled \
 	-Dopensles=disabled \
-	-Dmanpage-build=disabled \
+	-Doss-audio=disabled \
+	-Dpipewire=disabled \
+	-Dpulse=disabled \
+	-Dsdl2-audio=disabled \
+	-Dsndio=disabled \
+	-Dwasapi=disabled \
+	-Dcaca=disabled \
+	-Dcocoa=disabled \
+	-Dd3d11=disabled \
+	-Ddirect3d=disabled \
+	-Ddmabuf-wayland=disabled \
+	-Ddrm=disabled \
+	-Degl=disabled \
+	-Degl-android=disabled \
+	-Degl-angle=disabled \
+	-Degl-angle-lib=disabled \
+	-Degl-angle-win32=disabled \
+	-Degl-drm=disabled \
+	-Degl-wayland=disabled \
+	-Degl-x11=disabled \
+	-Dgbm=disabled \
+	-Dgl=disabled \
+	-Dgl-cocoa=disabled \
+	-Dgl-dxinterop=disabled \
+	-Dgl-win32=disabled \
+	-Dgl-x11=disabled \
+	-Djpeg=disabled \
+	-Dsdl2-video=disabled \
+	-Dshaderc=disabled \
+	-Dsixel=disabled \
+	-Dspirv-cross=disabled \
+	-Dplain-gl=disabled \
+	-Dvdpau=disabled \
+	-Dvdpau-gl-x11=disabled \
+	-Dvaapi=disabled \
+	-Dvaapi-drm=disabled \
+	-Dvaapi-wayland=disabled \
+	-Dvaapi-win32=disabled \
+	-Dvaapi-x11=disabled \
+	-Dvulkan=disabled \
+	-Dwayland=disabled \
+	-Dx11=disabled \
+	-Dxv=disabled \
+	-Dandroid-media-ndk=disabled \
+	-Dcuda-hwaccel=disabled \
+	-Dcuda-interop=disabled \
+	-Dd3d-hwaccel=disabled \
+	-Dd3d9-hwaccel=disabled \
+	-Dgl-dxinterop-d3d9=disabled \
+	-Dios-gl=disabled \
+	-Dvideotoolbox-gl=disabled \
+	-Dvideotoolbox-pl=disabled \
+	-Dmacos-10-15-4-features=disabled \
+	-Dmacos-11-features=disabled \
+	-Dmacos-11-3-features=disabled \
+	-Dmacos-12-features=disabled \
+	-Dmacos-cocoa-cb=disabled \
+	-Dmacos-media-player=disabled \
+	-Dmacos-touchbar=disabled \
+	-Dswift-build=disabled \
+	-Dswift-flags= \
 	-Dhtml-build=disabled \
+	-Dmanpage-build=disabled \
 	-Dpdf-build=disabled
 
 ninja -C $build -j$cores
