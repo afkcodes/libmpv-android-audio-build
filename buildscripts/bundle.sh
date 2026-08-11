@@ -15,12 +15,14 @@ set -euo pipefail
 
 # --------------------------------------------------
 
-if [ ! -f "deps" ]; then
-  sudo rm -r deps
-fi
-if [ ! -f "prefix" ]; then
-  sudo rm -r prefix
-fi
+# Start from a clean tree. The old form of this was
+#   if [ ! -f "deps" ]; then sudo rm -r deps; fi
+# which tests whether `deps` is not a regular FILE -- true when it does not
+# exist at all -- so on a fresh checkout it ran `rm -r` on a missing path and
+# failed. That was invisible while this script had no `set -e`; it is the first
+# thing `set -e` catches. `rm -rf` is the idempotent form and needs no test.
+# sudo is kept: a previous run's gradle step can leave root-owned files behind.
+sudo rm -rf deps prefix
 
 ./download.sh
 ./patch.sh
