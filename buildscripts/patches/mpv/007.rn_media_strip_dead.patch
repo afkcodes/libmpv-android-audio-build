@@ -1,0 +1,3839 @@
+EXPERIMENT (rn-media #30, branch experiment/size-reduction) — NOT synced from
+rn-media-engine yet. Canonicalise in the workshop before this ships.
+
+rn-media: strip dead subsystems from the audio-only mpv 0.41.0 build
+
+WHY THIS EXISTS
+    This engine is audio-only by construction: vid=no, vo=null, sid=no,
+    force-window=no, no terminal, no IPC, no scripting, and it is configured
+    with -Dgl=disabled -Dvulkan=disabled -Degl-android=disabled (every GPU
+    backend off; see scripts/mpv.sh's exhaustive option list). mpv still
+    COMPILES the whole GPU/shader renderer, the screenshot pipeline, encode
+    mode, the image writer, the bitmap-subtitle path and the default key
+    bindings into that build, because none of them has an off switch —
+    they are only unreachable at RUNTIME, which the linker cannot know.
+
+    Measured on the arm64-v8a artifact of rn-media-hls @ 4200e83:
+    9,233,464 -> 7,931,056 bytes stripped, i.e. -1,302,408 (-14.1%).
+    .text -668,448, .rodata -342,908, .data.rel.ro -62,608, .data -17,132.
+
+    Every removal below was verified to be COMPILED IN today before it was
+    removed — the object file exists in deps/mpv/_build-arm64/libmpv.so.p/
+    on the unpatched build (e.g. video_out_gpu_video.c.o 137,888 B,
+    video_out_vo_gpu_next.c.o 62,688 B, common_encode_lavc.c.o 30,080 B).
+    No speculative wins.
+
+PROVENANCE
+    The removal map comes from ales-drnz/libmpv-scripts (BSD-3-Clause),
+    patches/mpv/shared/patch_strip_mpv_dead.py — the same author whose
+    libass strip became our 003 and whose PCM tap became our 004. Their
+    script claims ~700 KB; on THIS build it is worth 1.27 MiB, because our
+    option set differs (we keep swscale and libplacebo, they drop swscale).
+
+    As with 003, the idea is theirs and the verification is ours, and it is
+    expressed as a static .patch because this fork applies patches with
+    `git apply`, not Python. That is not a stylistic preference: the Python
+    model applies edits with silent tolerance for a missing anchor
+    (`_drop_lines` skips lines it cannot find), so an upstream reflow
+    degrades it into a PARTIAL application that still exits 0. `git apply`
+    refuses.
+
+    Two deliberate differences from the prior art:
+      * Its stub_gpu.c has a `/*` inside a block comment and its
+        encode_lavc.c stub omits the header that declares
+        encoder_update_log(); both produce compiler warnings on our build,
+        which is -Wall -Wextra. Both fixed here.
+      * Its marker string is renamed to RN_MEDIA_STRIP_DEAD_V1 so the
+        provenance of a stub in OUR tree is unambiguous.
+
+WHAT IS REMOVED, AND WHY IT IS DEAD HERE
+
+ 1. GPU / shader render stack  (video/out/gpu/*.c, vo_gpu.c, vo_gpu_next.c,
+    placebo/ra_pl.c, placebo/utils.c, gpu_next/context.c)
+        PROOF, not assertion: video/out/gpu/context.c's contexts[] array is
+        gated entirely on HAVE_D3D11 / HAVE_VULKAN / HAVE_EGL_* / HAVE_GL_*
+        / HAVE_WAYLAND / HAVE_X11 / HAVE_COCOA, and deps/mpv/_build-arm64/
+        config.h has every one of them at 0. The array therefore contains
+        exactly one entry, &ra_ctx_dummy. vo_gpu and vo_gpu_next cannot
+        obtain a context that can present, on any device, in this build.
+        The same is true of render_backend_gpu (libmpv_gpu.c): it is cut
+        from render_backends[] in vo_libmpv.c, leaving render_backend_sw.
+        rn-media's core deliberately never links render.h at all
+        (packages/player/cpp/third_party/mpv/include/mpv/README.md) and
+        HybridMpvClient::attachVideoOutput() throws `unsupported`.
+        video/out/stub_gpu.c supplies the four m_sub_options that
+        options/options.c walks at startup (ra_ctx_conf, gl_video_conf,
+        gl_next_conf, spirv_conf) as empty-but-valid groups, plus the three
+        ra_hwdec_* helpers filters/f_lavfi.c still calls.
+
+ 2. Terminal video outputs  (vo_tct.c, vo_kitty.c)
+        ASCII-art and kitty-graphics VOs. There is no terminal on Android
+        and vo=null is fixed by the client; also they #include
+        <libswscale/swscale.h> directly, which matters for stage (b).
+
+ 3. Encode mode  (ao_lavc.c, vo_lavc.c, vo_image.c; encode_lavc.c stubbed)
+        Reachable only through --o=<file>, which turns mpv into a
+        transcoder. rn-media never sets it and the client API has no path
+        to it. The stub reproduces the `encode_config` m_sub_options
+        VERBATIM so options/options.c's OPT_SUBSTRUCT keeps parsing
+        identically, and provides the nine common/encode.h entry points the
+        player core calls unconditionally.
+
+ 4. Screenshot  (player/screenshot.c stubbed) and the image writer
+    (video/image_writer.c stubbed)
+        The `screenshot`, `screenshot-to-file` and `screenshot-raw`
+        commands stay in the command table and become no-ops — deliberately
+        safer than deleting multi-line option rows. image_writer_opts[] and
+        image_writer_opts_defaults are reproduced verbatim for
+        options/options.c's screenshot_conf. THIS IS THE ONE REMOVAL THAT
+        CHANGES OBSERVABLE CLIENT-API BEHAVIOUR (see RISKS).
+
+ 5. Bitmap-subtitle decode / render  (sd_lavc.c, img_convert.c,
+    lavc_conv.c, filter_sdh.c; draw_bmp.c stubbed, &sd_lavc cut from
+    sd_list[])
+        sid=no, no OSD, no VO. 003 already removed the libass half of this
+        path and left sd_ass stubbed; this removes the lavc half. The
+        draw_bmp stub exists only because sub/osd.c still references
+        mp_draw_sub_*.
+
+ 6. Default key bindings  (input/input.c: builtin_input_conf[] emptied)
+        etc/input.conf.inc is ~14 KB of .rodata mapping keys and mouse
+        buttons to commands. There is no input device wired to this
+        library: no terminal, no VO window, no IPC socket. The command
+        parser and every command are untouched — only the DEFAULT BINDINGS
+        table is empty, so the bind loop iterates zero times.
+        etc/builtin.conf.inc (the builtin profiles) is NOT touched.
+
+WHAT IS NOT TOUCHED
+    Nothing in audio/, demux/, stream/, filters/, or the four rn-media
+    patches. The 55-symbol export list is unchanged (verified on the
+    stripped artifact), as are all five rn-media marker strings, the 17
+    FFmpeg audio filters + overlay, HLS/mpegts, the vendored libiconv
+    alias tables, static zlib, and 16 KB page alignment.
+
+RISKS (see the experiment report for the full list)
+    * screenshot-raw becomes a no-op instead of an error. A client that
+      used it to pull cover art would get an empty result rather than a
+      failure. rn-media does not call it (grepped: packages/player has no
+      screenshot reference at all), but it is a real API-behaviour change
+      and the reason this patch is not a pure "dead code" removal.
+    * DT_NEEDED loses libdl.so, because dl_iterate_phdr — the C++ unwinder's
+      only libdl reference, pulled in by the libplacebo C++ TUs — is gone
+      with them. A shrink, not a gain; asserted as a subset, not equality.
+    * A future video plugin cannot reuse this .so. It already could not
+      (-Dgl=disabled), so this makes an existing constraint explicit.
+
+diff --git a/audio/out/ao.c b/audio/out/ao.c
+index f18d584..d6fee2e 100644
+--- a/audio/out/ao.c
++++ b/audio/out/ao.c
+@@ -55,7 +55,6 @@ extern const struct ao_driver audio_out_null;
+ extern const struct ao_driver audio_out_alsa;
+ extern const struct ao_driver audio_out_wasapi;
+ extern const struct ao_driver audio_out_pcm;
+-extern const struct ao_driver audio_out_lavc;
+ extern const struct ao_driver audio_out_sdl;
+ extern const struct ao_driver audio_out_aaudio;
+ 
+@@ -112,7 +111,6 @@ static const struct ao_driver * const audio_out_drivers[] = {
+     &audio_out_coreaudio_exclusive,
+ #endif
+     &audio_out_pcm,
+-    &audio_out_lavc,
+ };
+ 
+ static bool get_desc(struct m_obj_desc *dst, int index)
+diff --git a/common/encode_lavc.c b/common/encode_lavc.c
+index 4772759..76ab88b 100644
+--- a/common/encode_lavc.c
++++ b/common/encode_lavc.c
+@@ -1,8 +1,18 @@
+ /*
+- * muxing using libavformat
++ * RN_MEDIA_STRIP_DEAD_V1
+  *
+- * Copyright (C) 2010 Nicolas George <george@nsup.org>
+- * Copyright (C) 2011-2012 Rudolf Polzer <divVerent@xonotic.org>
++ * Stub of common/encode_lavc.c for an audio-only build with encode mode
++ * disabled (no --o=). common/encode.h and common/encode_lavc.h are kept
++ * UNCHANGED. Provides the player-core encode ABI as failures / no-ops and
++ * the `encode_config` option group (reproduced verbatim — pure option
++ * data) so options/options.c keeps parsing the --o* options identically
++ * (they simply never trigger an encode context, because the player only
++ * creates one when opts->encode_opts->file is set).
++ *
++ * The encoder_* helpers (encoder_context_alloc / encoder_init_codec_and_
++ * muxer / encoder_encode / encoder_get_mux_timebase_unlocked) are NOT
++ * provided: they were referenced only by the removed ao_lavc.c / vo_lavc.c
++ * / vo_image.c TUs.
+  *
+  * This file is part of mpv.
+  *
+@@ -20,58 +30,17 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-#include <libavutil/avutil.h>
+-#include <libavutil/timestamp.h>
++#include <stdbool.h>
++#include <stddef.h>
+ 
++#include "encode.h"
+ #include "encode_lavc.h"
+-#include "common/av_common.h"
+-#include "common/global.h"
+-#include "common/msg.h"
+-#include "common/msg_control.h"
+-#include "options/m_config.h"
+ #include "options/m_option.h"
+ #include "options/options.h"
+-#include "options/path.h"
+-#include "osdep/timer.h"
+-#include "video/out/vo.h"
+-#include "mpv_talloc.h"
+-#include "stream/stream.h"
+-
+-struct encode_priv {
+-    struct mp_log *log;
+-
+-    // --- All fields are protected by encode_lavc_context.lock
+-
+-    bool failed;
+-
+-    struct mp_tags *metadata;
+-
+-    AVFormatContext *muxer;
+-
+-    bool header_written; // muxer was initialized
+-
+-    struct mux_stream **streams;
+-    int num_streams;
+-
+-    // Statistics
+-    double t0;
+-
+-    long long abytes;
+-    long long vbytes;
+-
+-    unsigned int frames;
+-    double audioseconds;
+-};
+-
+-struct mux_stream {
+-    int index;                      // index of this into p->streams[]
+-    char name[80];
+-    struct encode_lavc_context *ctx;
+-    enum AVMediaType codec_type;
+-    AVRational encoder_timebase;    // packet timestamps from encoder
+-    AVStream *st;
+-};
+ 
++/* Option group: referenced by options/options.c via OPT_SUBSTRUCT(
++ * encode_opts, encode_config). Reproduced verbatim from upstream — pure
++ * option data, no libavformat dependency. */
+ #define OPT_BASE_STRUCT struct encode_opts
+ const struct m_sub_options encode_config = {
+     .opts = (const m_option_t[]) {
+@@ -94,852 +63,72 @@ const struct m_sub_options encode_config = {
+     },
+ };
+ 
++/* ---- player-core ABI (common/encode.h) --------------------------------
++ *
++ * Encode mode is unreachable in the audio-only build: the player only
++ * calls encode_lavc_init() when opts->encode_opts->file is set, and the
++ * kit never sets --o=. encode_lavc_init() returning NULL keeps
++ * mpctx->encode_lavc_ctx NULL, and every other function tolerates a NULL
++ * ctx (matching how the player calls them). */
++
+ struct encode_lavc_context *encode_lavc_init(struct mpv_global *global)
+ {
+-    struct encode_lavc_context *ctx = talloc_ptrtype(NULL, ctx);
+-    *ctx = (struct encode_lavc_context){
+-        .global = global,
+-        .options = mp_get_config_group(ctx, global, &encode_config),
+-        .priv = talloc_zero(ctx, struct encode_priv),
+-        .log = mp_log_new(ctx, global->log, "encode"),
+-    };
+-    mp_mutex_init(&ctx->lock);
+-
+-    struct encode_priv *p = ctx->priv;
+-    p->log = ctx->log;
+-
+-    const char *filename = ctx->options->file;
+-
+-    // STUPID STUPID STUPID STUPID avio
+-    // does not support "-" as file name to mean stdin/stdout
+-    // ffmpeg.c works around this too, the same way
+-    if (!strcmp(filename, "-"))
+-        filename = "pipe:1";
+-
+-    encode_lavc_discontinuity(ctx);
+-
+-    p->muxer = avformat_alloc_context();
+-    MP_HANDLE_OOM(p->muxer);
+-
+-    if (ctx->options->format && ctx->options->format[0]) {
+-        ctx->oformat = av_guess_format(ctx->options->format, filename, NULL);
+-    } else {
+-        ctx->oformat = av_guess_format(NULL, filename, NULL);
+-    }
+-
+-    if (!ctx->oformat) {
+-        MP_FATAL(ctx, "format not found\n");
+-        goto fail;
+-    }
+-
+-    p->muxer->oformat = ctx->oformat;
+-
+-    char *path = mp_get_user_path(NULL, global, filename);
+-    p->muxer->url = av_strdup(path);
+-    talloc_free(path);
+-    MP_HANDLE_OOM(p->muxer->url);
+-
+-    return ctx;
+-
+-fail:
+-    p->failed = true;
+-    encode_lavc_free(ctx);
++    (void)global;
+     return NULL;
+ }
+ 
+-void encode_lavc_set_metadata(struct encode_lavc_context *ctx,
+-                              struct mp_tags *metadata)
+-{
+-    struct encode_priv *p = ctx->priv;
+-
+-    mp_mutex_lock(&ctx->lock);
+-
+-    if (ctx->options->copy_metadata) {
+-        p->metadata = mp_tags_dup(ctx, metadata);
+-    } else {
+-        p->metadata = talloc_zero(ctx, struct mp_tags);
+-    }
+-
+-    if (ctx->options->set_metadata) {
+-        char **kv = ctx->options->set_metadata;
+-        // Set all user-provided metadata tags
+-        for (int n = 0; kv[n * 2]; n++) {
+-            MP_VERBOSE(ctx, "setting metadata value '%s' for key '%s'\n",
+-                       kv[n*2 + 0], kv[n*2 +1]);
+-            mp_tags_set_str(p->metadata, kv[n*2 + 0], kv[n*2 +1]);
+-        }
+-    }
+-
+-    if (ctx->options->remove_metadata) {
+-        char **k = ctx->options->remove_metadata;
+-        // Remove all user-provided metadata tags
+-        for (int n = 0; k[n]; n++) {
+-            MP_VERBOSE(ctx, "removing metadata key '%s'\n", k[n]);
+-            mp_tags_remove_str(p->metadata, k[n]);
+-        }
+-    }
+-
+-    mp_mutex_unlock(&ctx->lock);
+-}
+-
+ bool encode_lavc_free(struct encode_lavc_context *ctx)
+ {
+-    bool res = true;
+-    if (!ctx)
+-        return res;
+-
+-    struct encode_priv *p = ctx->priv;
+-
+-    if (!p->failed && !p->header_written) {
+-        MP_FATAL(p, "no data written to target file\n");
+-        p->failed = true;
+-    }
+-
+-    if (!p->failed && p->header_written) {
+-        if (av_write_trailer(p->muxer) < 0)
+-            MP_ERR(p, "error writing trailer\n");
+-
+-        MP_INFO(p, "video: encoded %lld bytes\n", p->vbytes);
+-        MP_INFO(p, "audio: encoded %lld bytes\n", p->abytes);
+-
+-        MP_INFO(p, "muxing overhead %lld bytes\n",
+-                (long long)(avio_size(p->muxer->pb) - p->vbytes - p->abytes));
+-    }
+-
+-    if (avio_closep(&p->muxer->pb) < 0 && !p->failed) {
+-        MP_ERR(p, "Closing file failed\n");
+-        p->failed = true;
+-    }
+-
+-    avformat_free_context(p->muxer);
+-
+-    res = !p->failed;
+-
+-    mp_mutex_destroy(&ctx->lock);
+-    talloc_free(ctx);
+-
+-    return res;
+-}
+-
+-// called locked
+-static void maybe_init_muxer(struct encode_lavc_context *ctx)
+-{
+-    struct encode_priv *p = ctx->priv;
+-
+-    if (p->header_written || p->failed)
+-        return;
+-
+-    // Check if all streams were initialized yet. We need data to know the
+-    // AVStream parameters, so we wait for data from _all_ streams before
+-    // starting.
+-    for (int n = 0; n < p->num_streams; n++) {
+-        if (!p->streams[n]->st)
+-            return;
+-    }
+-
+-    if (!(p->muxer->oformat->flags & AVFMT_NOFILE)) {
+-        MP_INFO(p, "Opening output file: %s\n", p->muxer->url);
+-
+-        if (avio_open(&p->muxer->pb, p->muxer->url, AVIO_FLAG_WRITE) < 0) {
+-            MP_FATAL(p, "could not open '%s'\n", p->muxer->url);
+-            goto failed;
+-        }
+-    }
+-
+-    p->t0 = mp_time_sec();
+-
+-    MP_INFO(p, "Opening muxer: %s [%s]\n",
+-            p->muxer->oformat->long_name, p->muxer->oformat->name);
+-
+-    if (p->metadata) {
+-        for (int i = 0; i < p->metadata->num_keys; i++) {
+-            av_dict_set(&p->muxer->metadata,
+-                p->metadata->keys[i], p->metadata->values[i], 0);
+-        }
+-    }
+-
+-    AVDictionary *opts = NULL;
+-    mp_set_avdict(&opts, ctx->options->fopts);
+-
+-    if (avformat_write_header(p->muxer, &opts) < 0) {
+-        MP_FATAL(p, "Failed to initialize muxer.\n");
+-        p->failed = true;
+-    } else {
+-        mp_avdict_print_unset(p->log, MSGL_WARN, opts);
+-    }
+-
+-    av_dict_free(&opts);
+-
+-    if (p->failed)
+-        goto failed;
+-
+-    p->header_written = true;
+-
+-    return;
+-
+-failed:
+-    p->failed = true;
+-}
+-
+-// called locked
+-static struct mux_stream *find_mux_stream(struct encode_lavc_context *ctx,
+-                                          enum AVMediaType codec_type)
+-{
+-    struct encode_priv *p = ctx->priv;
+-
+-    for (int n = 0; n < p->num_streams; n++) {
+-        struct mux_stream *s = p->streams[n];
+-        if (s->codec_type == codec_type)
+-            return s;
+-    }
+-
+-    return NULL;
+-}
+-
+-void encode_lavc_expect_stream(struct encode_lavc_context *ctx,
+-                               enum stream_type type)
+-{
+-    struct encode_priv *p = ctx->priv;
+-
+-    mp_mutex_lock(&ctx->lock);
+-
+-    enum AVMediaType codec_type = mp_to_av_stream_type(type);
+-
+-    // These calls are idempotent.
+-    if (find_mux_stream(ctx, codec_type))
+-        goto done;
+-
+-    if (p->header_written) {
+-        MP_ERR(p, "Cannot add a stream during encoding.\n");
+-        p->failed = true;
+-        goto done;
+-    }
+-
+-    struct mux_stream *dst = talloc_ptrtype(p, dst);
+-    *dst = (struct mux_stream){
+-        .index = p->num_streams,
+-        .ctx = ctx,
+-        .codec_type = mp_to_av_stream_type(type),
+-    };
+-    snprintf(dst->name, sizeof(dst->name), "%s", stream_type_name(type));
+-    MP_TARRAY_APPEND(p, p->streams, p->num_streams, dst);
+-
+-done:
+-    mp_mutex_unlock(&ctx->lock);
+-}
+-
+-// Signal that you are ready to encode (you provide the codec params etc. too).
+-// This returns a muxing handle which you can use to add encodec packets.
+-// Can be called only once per stream. info is copied by callee as needed.
+-static void encode_lavc_add_stream(struct encoder_context *enc,
+-                                   struct encode_lavc_context *ctx,
+-                                   struct encoder_stream_info *info)
+-{
+-    struct encode_priv *p = ctx->priv;
+-
+-    mp_mutex_lock(&ctx->lock);
+-
+-    struct mux_stream *dst = find_mux_stream(ctx, info->codecpar->codec_type);
+-    if (!dst) {
+-        MP_ERR(p, "Cannot add a stream at runtime.\n");
+-        p->failed = true;
+-        goto done;
+-    }
+-    if (dst->st) {
+-        // Possibly via --gapless-audio, or explicitly recreating AO/VO.
+-        MP_ERR(p, "Encoder was reinitialized; this is not allowed.\n");
+-        p->failed = true;
+-        dst = NULL;
+-        goto done;
+-    }
+-
+-    dst->st = avformat_new_stream(p->muxer, NULL);
+-    MP_HANDLE_OOM(dst->st);
+-
+-    dst->encoder_timebase = info->timebase;
+-    dst->st->time_base = info->timebase; // lavf will change this on muxer init
+-    // Some muxers (e.g. Matroska one) expect the sample_aspect_ratio to be
+-    // set on the AVStream.
+-    if (info->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+-        dst->st->sample_aspect_ratio = info->codecpar->sample_aspect_ratio;
+-
+-    if (avcodec_parameters_copy(dst->st->codecpar, info->codecpar) < 0)
+-        MP_HANDLE_OOM(NULL);
+-
+-    enc->mux_stream = dst;
+-
+-    maybe_init_muxer(ctx);
+-
+-done:
+-    mp_mutex_unlock(&ctx->lock);
+-}
+-
+-// Write a packet. This will take over ownership of `pkt`
+-static void encode_lavc_add_packet(struct mux_stream *dst, AVPacket *pkt)
+-{
+-    struct encode_lavc_context *ctx = dst->ctx;
+-    struct encode_priv *p = ctx->priv;
+-
+-    mp_assert(dst->st);
+-
+-    mp_mutex_lock(&ctx->lock);
+-
+-    if (p->failed)
+-        goto done;
+-
+-    if (!p->header_written) {
+-        MP_ERR(p, "Encoder trying to write packet before muxer was initialized.\n");
+-        p->failed = true;
+-        goto done;
+-    }
+-
+-    pkt->stream_index = dst->st->index;
+-    mp_assert(dst->st == p->muxer->streams[pkt->stream_index]);
+-
+-    av_packet_rescale_ts(pkt, dst->encoder_timebase, dst->st->time_base);
+-
+-    switch (dst->st->codecpar->codec_type) {
+-    case AVMEDIA_TYPE_VIDEO:
+-        p->vbytes += pkt->size;
+-        p->frames += 1;
+-        break;
+-    case AVMEDIA_TYPE_AUDIO:
+-        p->abytes += pkt->size;
+-        p->audioseconds += pkt->duration
+-            * (double)dst->st->time_base.num
+-            / (double)dst->st->time_base.den;
+-        break;
+-    }
+-
+-    if (av_interleaved_write_frame(p->muxer, pkt) < 0) {
+-        MP_ERR(p, "Writing packet failed.\n");
+-        p->failed = true;
+-    }
+-
+-    pkt = NULL;
+-
+-done:
+-    mp_mutex_unlock(&ctx->lock);
+-    if (pkt)
+-        av_packet_unref(pkt);
+-}
+-
+-AVRational encoder_get_mux_timebase_unlocked(struct encoder_context *p)
+-{
+-    return p->mux_stream->st->time_base;
++    (void)ctx;
++    return true;
+ }
+ 
+ void encode_lavc_discontinuity(struct encode_lavc_context *ctx)
+ {
+-    if (!ctx)
+-        return;
+-
+-    mp_mutex_lock(&ctx->lock);
+-    ctx->discontinuity_pts_offset = MP_NOPTS_VALUE;
+-    mp_mutex_unlock(&ctx->lock);
+-}
+-
+-static void encode_lavc_printoptions(struct mp_log *log, const void *obj,
+-                                     const char *indent, const char *subindent,
+-                                     const char *unit, int filter_and,
+-                                     int filter_eq)
+-{
+-    const AVOption *opt = NULL;
+-    char optbuf[32];
+-    while ((opt = av_opt_next(obj, opt))) {
+-        // if flags are 0, it simply hasn't been filled in yet and may be
+-        // potentially useful
+-        if (opt->flags)
+-            if ((opt->flags & filter_and) != filter_eq)
+-                continue;
+-        /* Don't print CONST's on level one.
+-         * Don't print anything but CONST's on level two.
+-         * Only print items from the requested unit.
+-         */
+-        if (!unit && opt->type == AV_OPT_TYPE_CONST) {
+-            continue;
+-        } else if (unit && opt->type != AV_OPT_TYPE_CONST) {
+-            continue;
+-        } else if (unit && opt->type == AV_OPT_TYPE_CONST
+-                 && strcmp(unit, opt->unit))
+-        {
+-            continue;
+-        } else if (unit && opt->type == AV_OPT_TYPE_CONST) {
+-            mp_info(log, "%s", subindent);
+-        } else {
+-            mp_info(log, "%s", indent);
+-        }
+-
+-        switch (opt->type) {
+-        case AV_OPT_TYPE_FLAGS:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<flags>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_INT:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<int>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_INT64:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<int64>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_DOUBLE:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<double>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_FLOAT:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<float>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_STRING:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<string>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_RATIONAL:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<rational>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_BINARY:
+-            snprintf(optbuf, sizeof(optbuf), "%s=<binary>", opt->name);
+-            break;
+-        case AV_OPT_TYPE_CONST:
+-            snprintf(optbuf, sizeof(optbuf), "  [+-]%s", opt->name);
+-            break;
+-        default:
+-            snprintf(optbuf, sizeof(optbuf), "%s", opt->name);
+-            break;
+-        }
+-        optbuf[sizeof(optbuf) - 1] = 0;
+-        mp_info(log, "%-32s ", optbuf);
+-        if (opt->help)
+-            mp_info(log, " %s", opt->help);
+-        mp_info(log, "\n");
+-        if (opt->unit && opt->type != AV_OPT_TYPE_CONST)
+-            encode_lavc_printoptions(log, obj, indent, subindent, opt->unit,
+-                                     filter_and, filter_eq);
+-    }
+-}
+-
+-bool encode_lavc_showhelp(struct mp_log *log, struct encode_opts *opts)
+-{
+-    bool help_output = false;
+-#define CHECKS(str) ((str) && \
+-                     strcmp((str), "help") == 0 ? (help_output |= 1) : 0)
+-#define CHECKV(strv) ((strv) && (strv)[0] && \
+-                      strcmp((strv)[0], "help") == 0 ? (help_output |= 1) : 0)
+-    if (CHECKS(opts->format)) {
+-        const AVOutputFormat *c = NULL;
+-        void *iter = NULL;
+-        mp_info(log, "Available output formats:\n");
+-        while ((c = av_muxer_iterate(&iter))) {
+-            mp_info(log, "  --of=%-13s %s\n", c->name,
+-                   c->long_name ? c->long_name : "");
+-        }
+-    }
+-    if (CHECKV(opts->fopts)) {
+-        AVFormatContext *c = avformat_alloc_context();
+-        const AVOutputFormat *format = NULL;
+-        mp_info(log, "Available output format ctx->options:\n");
+-        encode_lavc_printoptions(log, c, "  --ofopts=", "           ", NULL,
+-                                 AV_OPT_FLAG_ENCODING_PARAM,
+-                                 AV_OPT_FLAG_ENCODING_PARAM);
+-        avformat_free_context(c);
+-        void *iter = NULL;
+-        while ((format = av_muxer_iterate(&iter))) {
+-            if (format->priv_class) {
+-                mp_info(log, "Additionally, for --of=%s:\n",
+-                       format->name);
+-                encode_lavc_printoptions(log, &format->priv_class, "  --ofopts=",
+-                                         "           ", NULL,
+-                                         AV_OPT_FLAG_ENCODING_PARAM,
+-                                         AV_OPT_FLAG_ENCODING_PARAM);
+-            }
+-        }
+-    }
+-    if (CHECKV(opts->vopts)) {
+-        AVCodecContext *c = avcodec_alloc_context3(NULL);
+-        const AVCodec *codec = NULL;
+-        mp_info(log, "Available output video codec ctx->options:\n");
+-        encode_lavc_printoptions(log,
+-            c, "  --ovcopts=", "            ", NULL,
+-            AV_OPT_FLAG_ENCODING_PARAM |
+-            AV_OPT_FLAG_VIDEO_PARAM,
+-            AV_OPT_FLAG_ENCODING_PARAM |
+-            AV_OPT_FLAG_VIDEO_PARAM);
+-        av_free(c);
+-        void *iter = NULL;
+-        while ((codec = av_codec_iterate(&iter))) {
+-            if (!av_codec_is_encoder(codec))
+-                continue;
+-            if (codec->type != AVMEDIA_TYPE_VIDEO)
+-                continue;
+-            if (opts->vcodec && opts->vcodec[0] &&
+-                strcmp(opts->vcodec, codec->name) != 0)
+-                continue;
+-            if (codec->priv_class) {
+-                mp_info(log, "Additionally, for --ovc=%s:\n",
+-                       codec->name);
+-                encode_lavc_printoptions(log,
+-                    &codec->priv_class, "  --ovcopts=",
+-                    "            ", NULL,
+-                    AV_OPT_FLAG_ENCODING_PARAM |
+-                    AV_OPT_FLAG_VIDEO_PARAM,
+-                    AV_OPT_FLAG_ENCODING_PARAM |
+-                    AV_OPT_FLAG_VIDEO_PARAM);
+-            }
+-        }
+-    }
+-    if (CHECKV(opts->aopts)) {
+-        AVCodecContext *c = avcodec_alloc_context3(NULL);
+-        const AVCodec *codec = NULL;
+-        mp_info(log, "Available output audio codec ctx->options:\n");
+-        encode_lavc_printoptions(log,
+-            c, "  --oacopts=", "            ", NULL,
+-            AV_OPT_FLAG_ENCODING_PARAM |
+-            AV_OPT_FLAG_AUDIO_PARAM,
+-            AV_OPT_FLAG_ENCODING_PARAM |
+-            AV_OPT_FLAG_AUDIO_PARAM);
+-        av_free(c);
+-        void *iter = NULL;
+-        while ((codec = av_codec_iterate(&iter))) {
+-            if (!av_codec_is_encoder(codec))
+-                continue;
+-            if (codec->type != AVMEDIA_TYPE_AUDIO)
+-                continue;
+-            if (opts->acodec && opts->acodec[0] &&
+-                strcmp(opts->acodec, codec->name) != 0)
+-                continue;
+-            if (codec->priv_class) {
+-                mp_info(log, "Additionally, for --oac=%s:\n",
+-                       codec->name);
+-                encode_lavc_printoptions(log,
+-                    &codec->priv_class, "  --oacopts=",
+-                    "           ", NULL,
+-                    AV_OPT_FLAG_ENCODING_PARAM |
+-                    AV_OPT_FLAG_AUDIO_PARAM,
+-                    AV_OPT_FLAG_ENCODING_PARAM |
+-                    AV_OPT_FLAG_AUDIO_PARAM);
+-            }
+-        }
+-    }
+-    if (CHECKS(opts->vcodec)) {
+-        const AVCodec *c = NULL;
+-        void *iter = NULL;
+-        mp_info(log, "Available output video codecs:\n");
+-        while ((c = av_codec_iterate(&iter))) {
+-            if (!av_codec_is_encoder(c))
+-                continue;
+-            if (c->type != AVMEDIA_TYPE_VIDEO)
+-                continue;
+-            mp_info(log, "  --ovc=%-12s %s\n", c->name,
+-                   c->long_name ? c->long_name : "");
+-        }
+-    }
+-    if (CHECKS(opts->acodec)) {
+-        const AVCodec *c = NULL;
+-        void *iter = NULL;
+-        mp_info(log, "Available output audio codecs:\n");
+-        while ((c = av_codec_iterate(&iter))) {
+-            if (!av_codec_is_encoder(c))
+-                continue;
+-            if (c->type != AVMEDIA_TYPE_AUDIO)
+-                continue;
+-            mp_info(log, "  --oac=%-12s %s\n", c->name,
+-                   c->long_name ? c->long_name : "");
+-        }
+-    }
+-    return help_output;
+-}
+-
+-int encode_lavc_getstatus(struct encode_lavc_context *ctx,
+-                          char *buf, int bufsize,
+-                          float relative_position)
+-{
+-    if (!ctx)
+-        return -1;
+-
+-    struct encode_priv *p = ctx->priv;
+-
+-    double now = mp_time_sec();
+-    float minutes, megabytes, fps, x;
+-    float f = MPMAX(0.0001, relative_position);
+-
+-    mp_mutex_lock(&ctx->lock);
+-
+-    if (p->failed) {
+-        snprintf(buf, bufsize, "(failed)\n");
+-        goto done;
+-    }
+-
+-    minutes = (now - p->t0) / 60.0 * (1 - f) / f;
+-    megabytes = p->muxer->pb ? (avio_size(p->muxer->pb) / 1048576.0 / f) : 0;
+-    fps = p->frames / (now - p->t0);
+-    x = p->audioseconds / (now - p->t0);
+-    if (p->frames) {
+-        snprintf(buf, bufsize, "{%.1fmin %.1ffps %.1fMB}",
+-                 minutes, fps, megabytes);
+-    } else if (p->audioseconds) {
+-        snprintf(buf, bufsize, "{%.1fmin %.2fx %.1fMB}",
+-                 minutes, x, megabytes);
+-    } else {
+-        snprintf(buf, bufsize, "{%.1fmin %.1fMB}",
+-                 minutes, megabytes);
+-    }
+-    buf[bufsize - 1] = 0;
+-
+-done:
+-    mp_mutex_unlock(&ctx->lock);
+-    return 0;
+-}
+-
+-bool encode_lavc_didfail(struct encode_lavc_context *ctx)
+-{
+-    if (!ctx)
+-        return false;
+-    mp_mutex_lock(&ctx->lock);
+-    bool fail = ctx->priv->failed;
+-    mp_mutex_unlock(&ctx->lock);
+-    return fail;
++    (void)ctx;
+ }
+ 
+-static void encoder_destroy(void *ptr)
++bool encode_lavc_showhelp(struct mp_log *log, struct encode_opts *options)
+ {
+-    struct encoder_context *p = ptr;
+-
+-    av_packet_free(&p->pkt);
+-    avcodec_parameters_free(&p->info.codecpar);
+-    avcodec_free_context(&p->encoder);
+-    free_stream(p->twopass_bytebuffer);
++    (void)log; (void)options;
++    return false;
+ }
+ 
+-static const AVCodec *find_codec_for(struct encode_lavc_context *ctx,
+-                               enum stream_type type, bool *used_auto)
++int encode_lavc_getstatus(struct encode_lavc_context *ctx, char *buf,
++                          int bufsize, float relative_position)
+ {
+-    char *codec_name = type == STREAM_VIDEO
+-        ? ctx->options->vcodec
+-        : ctx->options->acodec;
+-    enum AVMediaType codec_type = mp_to_av_stream_type(type);
+-    const char *tname = stream_type_name(type);
+-
+-    *used_auto = !(codec_name && codec_name[0]);
+-
+-    const AVCodec *codec;
+-    if (*used_auto) {
+-        codec = avcodec_find_encoder(av_guess_codec(ctx->oformat, NULL,
+-                                     ctx->options->file, NULL,
+-                                     codec_type));
+-    } else {
+-        codec = avcodec_find_encoder_by_name(codec_name);
+-        if (!codec)
+-            MP_FATAL(ctx, "codec '%s' not found.\n", codec_name);
+-    }
+-
+-    if (codec && codec->type != codec_type) {
+-        MP_FATAL(ctx, "codec for %s has wrong media type\n", tname);
+-        codec = NULL;
+-    }
+-
+-    return codec;
++    (void)ctx; (void)buf; (void)bufsize; (void)relative_position;
++    return -1;
+ }
+ 
+-// Return whether the stream type is "supposed" to work.
+ bool encode_lavc_stream_type_ok(struct encode_lavc_context *ctx,
+                                 enum stream_type type)
+ {
+-    // If a codec was forced, let it proceed to actual encoding, and then error
+-    // if it doesn't work. (Worried that av_guess_codec() may return NULL for
+-    // some formats where a specific codec works anyway.)
+-    bool auto_codec;
+-    return !!find_codec_for(ctx, type, &auto_codec) || !auto_codec;
+-}
+-
+-struct encoder_context *encoder_context_alloc(struct encode_lavc_context *ctx,
+-                                              enum stream_type type,
+-                                              struct mp_log *log)
+-{
+-    if (!ctx) {
+-        mp_err(log, "the option --o (output file) must be specified\n");
+-        return NULL;
+-    }
+-
+-    struct encoder_context *p = talloc_ptrtype(NULL, p);
+-    talloc_set_destructor(p, encoder_destroy);
+-    *p = (struct encoder_context){
+-        .global = ctx->global,
+-        .options = ctx->options,
+-        .oformat = ctx->oformat,
+-        .type = type,
+-        .log = log,
+-        .encode_lavc_ctx = ctx,
+-    };
+-
+-    bool auto_codec;
+-    const AVCodec *codec = find_codec_for(ctx, type, &auto_codec);
+-    const char *tname = stream_type_name(type);
+-
+-    if (!codec) {
+-        if (auto_codec)
+-            MP_FATAL(p, "codec for %s not found\n", tname);
+-        goto fail;
+-    }
+-
+-    p->encoder = avcodec_alloc_context3(codec);
+-    MP_HANDLE_OOM(p->encoder);
+-
+-    return p;
+-
+-fail:
+-    talloc_free(p);
+-    return NULL;
++    (void)ctx; (void)type;
++    return false;
+ }
+ 
+-static void encoder_2pass_prepare(struct encoder_context *p)
++void encode_lavc_expect_stream(struct encode_lavc_context *ctx,
++                               enum stream_type type)
+ {
+-    char *filename = talloc_asprintf(NULL, "%s-%s-pass1.log",
+-                                     p->options->file,
+-                                     stream_type_name(p->type));
+-
+-    if (p->encoder->flags & AV_CODEC_FLAG_PASS2) {
+-        MP_INFO(p, "Reading 2-pass log: %s\n", filename);
+-        struct stream *s = stream_create(filename,
+-                                         STREAM_ORIGIN_DIRECT | STREAM_READ,
+-                                         NULL, p->global);
+-        if (s) {
+-            struct bstr content = stream_read_complete(s, p, 1000000000);
+-            if (content.start) {
+-                p->encoder->stats_in = content.start;
+-            } else {
+-                MP_WARN(p, "could not read '%s', "
+-                        "disabling 2-pass encoding at pass 1\n", filename);
+-            }
+-            free_stream(s);
+-        } else {
+-            MP_WARN(p, "could not open '%s', "
+-                    "disabling 2-pass encoding at pass 2\n", filename);
+-            p->encoder->flags &= ~(unsigned)AV_CODEC_FLAG_PASS2;
+-        }
+-    }
+-
+-    if (p->encoder->flags & AV_CODEC_FLAG_PASS1) {
+-        MP_INFO(p, "Writing to 2-pass log: %s\n", filename);
+-        p->twopass_bytebuffer = open_output_stream(filename, p->global);
+-        if (!p->twopass_bytebuffer) {
+-            MP_WARN(p, "could not open '%s', "
+-                    "disabling 2-pass encoding at pass 1\n", filename);
+-            p->encoder->flags &= ~(unsigned)AV_CODEC_FLAG_PASS1;
+-        }
+-    }
+-
+-    talloc_free(filename);
++    (void)ctx; (void)type;
+ }
+ 
+-bool encoder_init_codec_and_muxer(struct encoder_context *p)
++void encode_lavc_set_metadata(struct encode_lavc_context *ctx,
++                              struct mp_tags *metadata)
+ {
+-    mp_assert(!avcodec_is_open(p->encoder));
+-
+-    char **copts = p->type == STREAM_VIDEO
+-        ? p->options->vopts
+-        : p->options->aopts;
+-
+-    // Set these now, so the code below can read back parsed settings from it.
+-    mp_set_avopts(p->log, p->encoder, copts);
+-
+-    encoder_2pass_prepare(p);
+-
+-    if (p->oformat->flags & AVFMT_GLOBALHEADER)
+-        p->encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+-
+-    MP_INFO(p, "Opening encoder: %s [%s]\n",
+-            p->encoder->codec->long_name, p->encoder->codec->name);
+-
+-    if (p->encoder->codec->capabilities & AV_CODEC_CAP_EXPERIMENTAL) {
+-        p->encoder->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
+-        MP_WARN(p, "\n\n"
+-                   "           ********************************************\n"
+-                   "           ****    Experimental codec selected!     ****\n"
+-                   "           ********************************************\n\n"
+-                   "This means the output file may be broken or bad.\n"
+-                   "Possible reasons, problems, workarounds:\n"
+-                   "- Codec implementation in ffmpeg is not finished yet.\n"
+-                   "     Try updating ffmpeg.\n"
+-                   "- Bad picture quality, blocks, blurriness.\n"
+-                   "     Experiment with codec settings to maybe still get the\n"
+-                   "     desired quality output at the expense of bitrate.\n"
+-                   "- Broken files.\n"
+-                   "     May not work at all, or break with other software.\n"
+-                   "- Slow compression.\n"
+-                   "     Bear with it.\n"
+-                   "- Crashes.\n"
+-                   "     Happens. Try varying options to work around.\n"
+-                   "If none of this helps you, try another codec in place of %s.\n\n",
+-                p->encoder->codec->name);
+-    }
+-
+-    if (avcodec_open2(p->encoder, p->encoder->codec, NULL) < 0) {
+-        MP_FATAL(p, "Could not initialize encoder.\n");
+-        goto fail;
+-    }
+-
+-    p->info.timebase = p->encoder->time_base; // (_not_ changed by enc. init)
+-    p->info.codecpar = avcodec_parameters_alloc();
+-    MP_HANDLE_OOM(p->info.codecpar);
+-    if (avcodec_parameters_from_context(p->info.codecpar, p->encoder) < 0)
+-        goto fail;
+-
+-    p->pkt = av_packet_alloc();
+-    MP_HANDLE_OOM(p->pkt);
+-
+-    encode_lavc_add_stream(p, p->encode_lavc_ctx, &p->info);
+-    if (!p->mux_stream)
+-        goto fail;
+-
+-    return true;
+-
+-fail:
+-    avcodec_free_context(&p->encoder);
+-    return false;
++    (void)ctx; (void)metadata;
+ }
+ 
+-bool encoder_encode(struct encoder_context *p, AVFrame *frame)
++bool encode_lavc_didfail(struct encode_lavc_context *ctx)
+ {
+-    int status = avcodec_send_frame(p->encoder, frame);
+-    if (status < 0) {
+-        if (frame && status == AVERROR_EOF)
+-            MP_ERR(p, "new data after sending EOF to encoder\n");
+-        goto fail;
+-    }
+-
+-    AVPacket *packet = p->pkt;
+-    for (;;) {
+-        status = avcodec_receive_packet(p->encoder, packet);
+-        if (status == AVERROR(EAGAIN))
+-            break;
+-        if (status < 0 && status != AVERROR_EOF)
+-            goto fail;
+-
+-        if (p->twopass_bytebuffer && p->encoder->stats_out) {
+-            stream_write_buffer(p->twopass_bytebuffer, p->encoder->stats_out,
+-                                strlen(p->encoder->stats_out));
+-        }
+-
+-        if (status == AVERROR_EOF)
+-            break;
+-
+-        encode_lavc_add_packet(p->mux_stream, packet);
+-    }
+-
+-    return true;
+-
+-fail:
+-    MP_ERR(p, "error encoding at %s\n",
+-           frame ? av_ts2timestr(frame->pts, &p->encoder->time_base) : "EOF");
++    (void)ctx;
+     return false;
+ }
+ 
++/* Declared in common/encode_lavc.h; called from player/main.c at startup
++ * to wire the global log. No encode log to install in the stub. */
+ void encoder_update_log(struct mpv_global *global)
+ {
+-    struct encode_opts *options = mp_get_config_group(NULL, global, &encode_config);
+-    if (options->file && (!strcmp(options->file, "-") ||
+-                          !strcmp(options->file, "/dev/stdout") ||
+-                          !strcmp(options->file, "pipe:") ||
+-                          !strcmp(options->file, "pipe:1")))
+-    {
+-        mp_msg_force_stderr(global, true);
+-    }
+-    talloc_free(options);
++    (void)global;
+ }
+-
+-// vim: ts=4 sw=4 et
+diff --git a/input/input.c b/input/input.c
+index 412c6db..79c3c6e 100644
+--- a/input/input.c
++++ b/input/input.c
+@@ -262,9 +262,8 @@ const struct m_sub_options input_config = {
+     .change_flags = UPDATE_INPUT,
+ };
+ 
+-static const char builtin_input_conf[] =
+-#include "etc/input.conf.inc"
+-;
++/* RN_MEDIA_STRIP_DEAD_V1: default key bindings stripped (empty builtin conf). */
++static const char builtin_input_conf[] = "";
+ 
+ static bool test_rect(struct mp_rect *rc, int x, int y)
+ {
+diff --git a/meson.build b/meson.build
+index bfd0872..5300175 100644
+--- a/meson.build
++++ b/meson.build
+@@ -68,7 +68,6 @@ sources = files(
+     'audio/fmt-conversion.c',
+     'audio/format.c',
+     'audio/out/ao.c',
+-    'audio/out/ao_lavc.c',
+     'audio/out/ao_null.c',
+     'audio/out/ao_pcm.c',
+     'audio/out/buffer.c',
+@@ -195,11 +194,7 @@ sources = files(
+     ## Subtitles
+     'sub/dec_sub.c',
+     'sub/draw_bmp.c',
+-    'sub/filter_sdh.c',
+-    'sub/img_convert.c',
+-    'sub/lavc_conv.c',
+     'sub/osd.c',
+-    'sub/sd_lavc.c',
+     'sub/stub_libass.c',
+ 
+     ## Video
+@@ -220,37 +215,16 @@ sources = files(
+     'video/out/dither.c',
+     'video/out/dr_helper.c',
+     'video/out/filter_kernels.c',
+-    'video/out/gpu/context.c',
+-    'video/out/gpu/error_diffusion.c',
+-    'video/out/gpu/hwdec.c',
+-    'video/out/gpu/lcms.c',
+-    'video/out/gpu/libmpv_gpu.c',
+-    'video/out/gpu/osd.c',
+-    'video/out/gpu/ra.c',
+-    'video/out/gpu/shader_cache.c',
+-    'video/out/gpu/spirv.c',
+-    'video/out/gpu/user_shaders.c',
+-    'video/out/gpu/utils.c',
+-    'video/out/gpu/video.c',
+-    'video/out/gpu/video_shaders.c',
+     'video/out/libmpv_sw.c',
+     'video/out/vo.c',
+-    'video/out/vo_gpu.c',
+-    'video/out/vo_image.c',
+-    'video/out/vo_lavc.c',
++    'video/out/stub_gpu.c',
+     'video/out/vo_libmpv.c',
+     'video/out/vo_null.c',
+-    'video/out/vo_tct.c',
+-    'video/out/vo_kitty.c',
+     'video/out/win_state.c',
+     'video/repack.c',
+     'video/sws_utils.c',
+ 
+     ## libplacebo
+-    'video/out/placebo/ra_pl.c',
+-    'video/out/placebo/utils.c',
+-    'video/out/vo_gpu_next.c',
+-    'video/out/gpu_next/context.c',
+ 
+     ## osdep
+     'osdep/io.c',
+diff --git a/player/screenshot.c b/player/screenshot.c
+index c733a2b..2db562d 100644
+--- a/player/screenshot.c
++++ b/player/screenshot.c
+@@ -1,4 +1,17 @@
+ /*
++ * RN_MEDIA_STRIP_DEAD_V1
++ *
++ * No-op stub of player/screenshot.c for an audio-only build. The kit never
++ * takes screenshots (vo=null, no image output). Every symbol below is
++ * referenced by code that stays compiled:
++ *   - screenshot_init / handle_each_frame_screenshot : player/main.c,
++ *     player/playloop.c
++ *   - convert_image : video/image_loader.c (and former screenshot paths)
++ *   - cmd_screenshot / cmd_screenshot_to_file / cmd_screenshot_raw :
++ *     the command table in player/command.c
++ * screenshot.h is kept UNCHANGED; this TU provides every symbol it declares.
++ * The commands remain registered but do nothing.
++ *
+  * This file is part of mpv.
+  *
+  * mpv is free software; you can redistribute it and/or
+@@ -15,609 +28,46 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-#include <stdlib.h>
+-#include <string.h>
+-#include <time.h>
+-
+-#include <libavcodec/avcodec.h>
+-
+-#include "osdep/io.h"
++#include <stddef.h>
+ 
+-#include "mpv_talloc.h"
+ #include "screenshot.h"
+-#include "core.h"
+-#include "command.h"
+-#include "input/cmd.h"
+-#include "misc/bstr.h"
+-#include "misc/dispatch.h"
+-#include "misc/node.h"
+-#include "misc/thread_tools.h"
+-#include "common/msg.h"
+-#include "options/path.h"
+-#include "video/mp_image.h"
+-#include "video/mp_image_pool.h"
+-#include "video/out/vo.h"
+-#include "video/image_writer.h"
+-#include "video/sws_utils.h"
+-#include "sub/osd.h"
+-
+-#include "video/csputils.h"
+-
+-#define MODE_SCALED 1
+-#define MODE_SUBTITLES 2
+-#define MODE_OSD 4
+-
+-typedef struct screenshot_ctx {
+-    struct MPContext *mpctx;
+-    struct mp_log *log;
+-
+-    // Command to repeat in each-frame mode.
+-    struct mp_cmd *each_frame;
+-
+-    int frameno;
+-    uint64_t last_frame_count;
+-} screenshot_ctx;
+ 
+ void screenshot_init(struct MPContext *mpctx)
+ {
+-    mpctx->screenshot_ctx = talloc(mpctx, screenshot_ctx);
+-    *mpctx->screenshot_ctx = (screenshot_ctx) {
+-        .mpctx = mpctx,
+-        .frameno = 1,
+-        .log = mp_log_new(mpctx, mpctx->log, "screenshot")
+-    };
+-}
+-
+-static char *stripext(void *talloc_ctx, const char *s)
+-{
+-    const char *end = strrchr(s, '.');
+-    if (!end)
+-        end = s + strlen(s);
+-    return talloc_asprintf(talloc_ctx, "%.*s", (int)(end - s), s);
+-}
+-
+-static bool write_screenshot(struct mp_cmd_ctx *cmd, struct mp_image *img,
+-                             const char *filename, struct image_writer_opts *opts,
+-                             bool overwrite)
+-{
+-    struct MPContext *mpctx = cmd->mpctx;
+-    struct image_writer_opts *gopts = mpctx->opts->screenshot_image_opts;
+-    struct image_writer_opts opts_copy = opts ? *opts : *gopts;
+-
+-    mp_cmd_msg(cmd, MSGL_V, "Starting screenshot: '%s'", filename);
+-
+-    mp_core_unlock(mpctx);
+-
+-    bool ok = img && write_image(img, &opts_copy, filename, mpctx->global,
+-                                 mpctx->screenshot_ctx->log, overwrite);
+-
+-    mp_core_lock(mpctx);
+-
+-    if (ok) {
+-        mp_cmd_msg(cmd, MSGL_INFO, "Screenshot: '%s'", filename);
+-    } else {
+-        mp_cmd_msg(cmd, MSGL_ERR, "Error writing screenshot!");
+-    }
+-    return ok;
++    (void)mpctx;
+ }
+ 
+-#ifdef _WIN32
+-#define ILLEGAL_FILENAME_CHARS "?\"/\\<>*|:"
+-#else
+-#define ILLEGAL_FILENAME_CHARS "/"
+-#endif
+-
+-// Replace all characters disallowed in filenames with '_' and return the newly
+-// allocated result string.
+-static char *sanitize_filename(void *talloc_ctx, const char *s)
+-{
+-    char *res = talloc_strdup(talloc_ctx, s);
+-    char *cur = res;
+-    while (*cur) {
+-        if (strchr(ILLEGAL_FILENAME_CHARS, *cur) || ((unsigned char)*cur) < 32)
+-            *cur = '_';
+-        cur++;
+-    }
+-    return res;
+-}
+-
+-static void append_filename(char **s, const char *f)
+-{
+-    char *append = sanitize_filename(NULL, f);
+-    *s = talloc_strdup_append(*s, append);
+-    talloc_free(append);
+-}
+-
+-static char *create_fname(struct MPContext *mpctx, char *template,
+-                          const char *file_ext, int *sequence, int *frameno)
+-{
+-    char *res = talloc_strdup(NULL, ""); //empty string, non-NULL context
+-
+-    time_t raw_time = time(NULL);
+-    struct tm *local_time = localtime(&raw_time);
+-
+-    if (!template || *template == '\0')
+-        return NULL;
+-
+-    for (;;) {
+-        char *next = strchr(template, '%');
+-        if (!next)
+-            break;
+-        res = talloc_strndup_append(res, template, next - template);
+-        template = next + 1;
+-        char fmt = *template++;
+-        switch (fmt) {
+-        case '#':
+-        case '0':
+-        case 'n': {
+-            int digits = '4';
+-            if (fmt == '#') {
+-                if (!*sequence) {
+-                    *frameno = 1;
+-                }
+-                fmt = *template++;
+-            }
+-            if (fmt == '0') {
+-                digits = *template++;
+-                if (digits < '0' || digits > '9')
+-                    goto error_exit;
+-                fmt = *template++;
+-            }
+-            if (fmt != 'n')
+-                goto error_exit;
+-            char fmtstr[] = {'%', '0', digits, 'd', '\0'};
+-            res = talloc_asprintf_append(res, fmtstr, *frameno);
+-            if (*frameno < INT_MAX - 1) {
+-                (*frameno) += 1;
+-                (*sequence) += 1;
+-            }
+-            break;
+-        }
+-        case 'f':
+-        case 'F': {
+-            char *video_file = NULL;
+-            if (mpctx->filename)
+-                video_file = mp_basename(mpctx->filename);
+-
+-            if (!video_file)
+-                video_file = "NO_FILE";
+-
+-            char *name = video_file;
+-            if (fmt == 'F')
+-                name = stripext(res, video_file);
+-            append_filename(&res, name);
+-            break;
+-        }
+-        case 'x':
+-        case 'X': {
+-            char *fallback = "";
+-            if (fmt == 'X') {
+-                if (template[0] != '{')
+-                    goto error_exit;
+-                char *end = strchr(template, '}');
+-                if (!end)
+-                    goto error_exit;
+-                fallback = talloc_strndup(res, template + 1, end - template - 1);
+-                template = end + 1;
+-            }
+-            if (!mpctx->filename || mp_is_url(bstr0(mpctx->filename))) {
+-                res = talloc_strdup_append(res, fallback);
+-            } else {
+-                bstr dir = mp_dirname(mpctx->filename);
+-                if (!bstr_equals0(dir, "."))
+-                    res = talloc_asprintf_append(res, "%.*s", BSTR_P(dir));
+-            }
+-            break;
+-        }
+-        case 'p':
+-        case 'P': {
+-            char *t = mp_format_time(get_playback_time(mpctx), fmt == 'P');
+-            append_filename(&res, t);
+-            talloc_free(t);
+-            break;
+-        }
+-        case 'w': {
+-            char tfmt = *template;
+-            if (!tfmt)
+-                goto error_exit;
+-            template++;
+-            char fmtstr[] = {'%', tfmt, '\0'};
+-            char *s = mp_format_time_fmt(fmtstr, get_playback_time(mpctx));
+-            if (!s)
+-                goto error_exit;
+-            append_filename(&res, s);
+-            talloc_free(s);
+-            break;
+-        }
+-        case 't': {
+-            char tfmt = *template;
+-            if (!tfmt)
+-                goto error_exit;
+-            template++;
+-            char fmtstr[] = {'%', tfmt, '\0'};
+-            char buffer[80];
+-            if (strftime(buffer, sizeof(buffer), fmtstr, local_time) == 0)
+-                buffer[0] = '\0';
+-            append_filename(&res, buffer);
+-            break;
+-        }
+-        case '{': {
+-            char *end = strchr(template, '}');
+-            if (!end)
+-                goto error_exit;
+-            struct bstr prop = bstr_splice(bstr0(template), 0, end - template);
+-            char *tmp = talloc_asprintf(NULL, "${%.*s}", BSTR_P(prop));
+-            char *s = mp_property_expand_string(mpctx, tmp);
+-            talloc_free(tmp);
+-            if (s)
+-                append_filename(&res, s);
+-            talloc_free(s);
+-            template = end + 1;
+-            break;
+-        }
+-        case '%':
+-            res = talloc_strdup_append(res, "%");
+-            break;
+-        default:
+-            goto error_exit;
+-        }
+-    }
+-
+-    res = talloc_strdup_append(res, template);
+-    res = talloc_asprintf_append(res, ".%s", file_ext);
+-    char *fname = mp_get_user_path(NULL, mpctx->global, res);
+-    talloc_free(res);
+-    return fname;
+-
+-error_exit:
+-    talloc_free(res);
+-    return NULL;
+-}
+-
+-static char *gen_fname(struct mp_cmd_ctx *cmd, const char *file_ext)
+-{
+-    struct MPContext *mpctx = cmd->mpctx;
+-    screenshot_ctx *ctx = mpctx->screenshot_ctx;
+-
+-    int sequence = 0;
+-    for (;;) {
+-        int prev_sequence = sequence;
+-        char *fname = create_fname(ctx->mpctx,
+-                                   ctx->mpctx->opts->screenshot_template,
+-                                   file_ext,
+-                                   &sequence,
+-                                   &ctx->frameno);
+-
+-        if (!fname) {
+-            mp_cmd_msg(cmd, MSGL_ERR, "Invalid screenshot filename "
+-                       "template! Fix or remove the --screenshot-template "
+-                       "option.");
+-            return NULL;
+-        }
+-
+-        char *dir = ctx->mpctx->opts->screenshot_dir;
+-        if (dir && dir[0]) {
+-            void *t = fname;
+-            dir = mp_get_user_path(t, ctx->mpctx->global, dir);
+-            fname = mp_path_join(NULL, dir, fname);
+-
+-            mp_mkdirp(dir);
+-
+-            talloc_free(t);
+-        }
+-
+-        char *full_dir = bstrto0(fname, mp_dirname(fname));
+-        mp_mkdirp(full_dir);
+-
+-        if (!mp_path_exists(fname))
+-            return fname;
+-
+-        if (sequence == prev_sequence) {
+-            mp_cmd_msg(cmd, MSGL_ERR, "Can't save screenshot, file '%s' "
+-                       "already exists!", fname);
+-            talloc_free(fname);
+-            return NULL;
+-        }
+-
+-        talloc_free(fname);
+-    }
+-}
+-
+-static void add_osd(struct MPContext *mpctx, struct mp_image *image, int mode)
+-{
+-    struct mp_osd_res res = (mode & MODE_SCALED) ? osd_get_vo_res(mpctx->video_out->osd) :
+-                            osd_res_from_image_params(&image->params);
+-    if (mode & MODE_SUBTITLES) {
+-        osd_draw_on_image(mpctx->osd, res, mpctx->video_pts,
+-                          OSD_DRAW_SUB_ONLY, image);
+-    }
+-    if (mode & MODE_OSD) {
+-        osd_draw_on_image(mpctx->osd, res, mpctx->video_pts,
+-                          OSD_DRAW_OSD_ONLY, image);
+-    }
+-}
+-
+-static struct mp_image *screenshot_get(struct MPContext *mpctx, int mode,
+-                                       bool high_depth)
++void handle_each_frame_screenshot(struct MPContext *mpctx)
+ {
+-    struct mp_image *image = NULL;
+-    const struct image_writer_opts *imgopts = mpctx->opts->screenshot_image_opts;
+-    if ((mode & MODE_SUBTITLES) && osd_get_render_subs_in_filter(mpctx->osd))
+-        mode &= ~MODE_SUBTITLES;
+-
+-    if (!mpctx->video_out || !mpctx->video_out->config_ok)
+-        return NULL;
+-
+-    vo_wait_frame(mpctx->video_out); // important for each-frame mode
+-
+-    bool use_sw = mpctx->opts->screenshot_sw;
+-    bool scaled = mode & MODE_SCALED;
+-    bool subs = mode & MODE_SUBTITLES;
+-    bool osd = mode & MODE_OSD;
+-    struct voctrl_screenshot ctrl = {
+-        .scaled = scaled,
+-        .subs = subs,
+-        .osd = osd,
+-        .high_bit_depth = high_depth && imgopts->high_bit_depth,
+-        .native_csp = image_writer_flexible_csp(imgopts),
+-    };
+-    if (!use_sw)
+-        vo_control(mpctx->video_out, VOCTRL_SCREENSHOT, &ctrl);
+-    image = ctrl.res;
+-
+-    // VOCTRL_SCREENSHOT_WIN gets the complete rendered image so it's only
+-    // usable for scaled+sub+osd screenshots.
+-    if (!use_sw && !image && scaled && subs && osd)
+-        vo_control(mpctx->video_out, VOCTRL_SCREENSHOT_WIN, &image);
+-
+-    if (!image) {
+-        use_sw = true;
+-        MP_VERBOSE(mpctx->screenshot_ctx, "Falling back to software screenshot.\n");
+-        image = vo_get_current_frame(mpctx->video_out);
+-    }
+-
+-    // vo_get_current_frame() can return a hardware frame, which we have to download first.
+-    if (image && image->fmt.flags & MP_IMGFLAG_HWACCEL) {
+-        struct mp_image *nimage = mp_image_hw_download(image, NULL);
+-        talloc_free(image);
+-        if (!nimage)
+-            return NULL;
+-        image = nimage;
+-    }
+-
+-    if (use_sw && image && scaled) {
+-        if (mp_image_crop_valid(&image->params) &&
+-            (mp_rect_w(image->params.crop) != image->w ||
+-             mp_rect_h(image->params.crop) != image->h))
+-        {
+-            struct mp_image *nimage = mp_image_new_ref(image);
+-            if (!nimage) {
+-                MP_ERR(mpctx->screenshot_ctx, "mp_image_new_ref failed!\n");
+-                return NULL;
+-            }
+-            mp_image_crop_rc(nimage, image->params.crop);
+-            talloc_free(image);
+-            image = nimage;
+-        }
+-        struct mp_osd_res res = osd_get_vo_res(mpctx->video_out->osd);
+-        struct mp_osd_res image_res = osd_res_from_image_params(&image->params);
+-        if (!osd_res_equals(res, image_res)) {
+-            struct mp_image *nimage = mp_image_alloc(image->imgfmt, res.w, res.h);
+-            if (!nimage) {
+-                talloc_free(image);
+-                return NULL;
+-            }
+-            struct mp_sws_context *sws = mp_sws_alloc(NULL);
+-            mp_sws_scale(sws, nimage, image);
+-            talloc_free(image);
+-            talloc_free(sws);
+-            image = nimage;
+-        }
+-    }
+-
+-    if (!image)
+-        return NULL;
+-
+-    if (use_sw && mode != 0)
+-        add_osd(mpctx, image, mode);
+-    mp_image_params_guess_csp(&image->params);
+-    return image;
++    (void)mpctx;
+ }
+ 
+ struct mp_image *convert_image(struct mp_image *image, int destfmt,
+                                struct mpv_global *global, struct mp_log *log)
+ {
+-    int d_w, d_h;
+-    mp_image_params_get_dsize(&image->params, &d_w, &d_h);
+-
+-    struct mp_image_params p = {
+-        .imgfmt = destfmt,
+-        .w = d_w,
+-        .h = d_h,
+-        .p_w = 1,
+-        .p_h = 1,
+-    };
+-    mp_image_params_guess_csp(&p);
+-
+-    if (mp_image_params_equal(&p, &image->params))
+-        return mp_image_new_ref(image);
+-
+-    struct mp_image *dst = mp_image_alloc(p.imgfmt, p.w, p.h);
+-    if (!dst) {
+-        mp_err(log, "Out of memory.\n");
+-        return NULL;
+-    }
+-    mp_image_copy_attributes(dst, image);
+-
+-    dst->params = p;
+-
+-    struct mp_sws_context *sws = mp_sws_alloc(NULL);
+-    sws->log = log;
+-    if (global)
+-        mp_sws_enable_cmdline_opts(sws, global);
+-    bool ok = mp_sws_scale(sws, dst, image) >= 0;
+-    talloc_free(sws);
+-
+-    if (!ok) {
+-        mp_err(log, "Error when converting image.\n");
+-        talloc_free(dst);
+-        return NULL;
+-    }
+-
+-    return dst;
++    /* No swscale / image conversion in the audio-only build. The only
++     * caller that stays compiled (video/image_loader.c) treats NULL as
++     * "decode/convert failed". */
++    (void)image; (void)destfmt; (void)global; (void)log;
++    return NULL;
+ }
+ 
+-// mode is the same as in screenshot_get()
+-static struct mp_image *screenshot_get_rgb(struct MPContext *mpctx, int mode,
+-                                           bool high_depth, enum mp_imgfmt format)
++/* mp_cmd_ctx-based command handlers. These commands are not exec_async, so
++ * the command core (run_command in player/command.c) calls
++ * mp_cmd_ctx_complete() automatically once the handler returns — exactly as
++ * the real handlers rely on. The stub therefore just returns (no-op); the
++ * command reports its default cmd->success == false. */
++void cmd_screenshot(void *p)
+ {
+-    struct mp_image *mpi = screenshot_get(mpctx, mode, high_depth);
+-    if (!mpi)
+-        return NULL;
+-    struct mp_image *res = convert_image(mpi, format, mpctx->global,
+-                                         mpctx->log);
+-    talloc_free(mpi);
+-    return res;
++    (void)p;
+ }
+ 
+ void cmd_screenshot_to_file(void *p)
+ {
+-    struct mp_cmd_ctx *cmd = p;
+-    struct MPContext *mpctx = cmd->mpctx;
+-    const char *filename = cmd->args[0].v.s;
+-    int mode = cmd->args[1].v.i;
+-    struct image_writer_opts opts = *mpctx->opts->screenshot_image_opts;
+-
+-    char *ext = mp_splitext(filename, NULL);
+-    int format = image_writer_format_from_ext(ext);
+-    if (format)
+-        opts.format = format;
+-    bool high_depth = image_writer_high_depth(&opts);
+-    struct mp_image *image = screenshot_get(mpctx, mode, high_depth);
+-    if (!image) {
+-        mp_cmd_msg(cmd, MSGL_ERR, "Taking screenshot failed.");
+-        cmd->success = false;
+-        return;
+-    }
+-    char *path = mp_get_user_path(NULL, mpctx->global, filename);
+-    cmd->success = write_screenshot(cmd, image, path, &opts, true);
+-    talloc_free(image);
+-    talloc_free(path);
+-}
+-
+-void cmd_screenshot(void *p)
+-{
+-    struct mp_cmd_ctx *cmd = p;
+-    struct MPContext *mpctx = cmd->mpctx;
+-    struct mpv_node *res = &cmd->result;
+-    int mode = cmd->args[0].v.i & 7;
+-    bool each_frame_toggle = (cmd->args[0].v.i | cmd->args[1].v.i) & 8;
+-    bool each_frame_mode = cmd->args[0].v.i & 16;
+-
+-    screenshot_ctx *ctx = mpctx->screenshot_ctx;
+-
+-    if ((mode & MODE_SUBTITLES) && osd_get_render_subs_in_filter(mpctx->osd))
+-        mode &= ~MODE_SUBTITLES;
+-
+-    if (!each_frame_mode) {
+-        if (each_frame_toggle) {
+-            if (ctx->each_frame) {
+-                TA_FREEP(&ctx->each_frame);
+-                return;
+-            }
+-            ctx->each_frame = talloc_steal(ctx, mp_cmd_clone(cmd->cmd));
+-            ctx->each_frame->args[0].v.i |= 16;
+-        } else {
+-            TA_FREEP(&ctx->each_frame);
+-        }
+-    }
+-
+-    cmd->success = false;
+-
+-    struct image_writer_opts *opts = mpctx->opts->screenshot_image_opts;
+-    bool high_depth = image_writer_high_depth(opts);
+-
+-    struct mp_image *image = screenshot_get(mpctx, mode, high_depth);
+-
+-    if (image) {
+-        char *filename = gen_fname(cmd, image_writer_file_ext(opts));
+-        if (filename) {
+-            cmd->success = write_screenshot(cmd, image, filename, NULL, false);
+-            if (cmd->success) {
+-                node_init(res, MPV_FORMAT_NODE_MAP, NULL);
+-                node_map_add_string(res, "filename", filename);
+-            }
+-        }
+-        talloc_free(filename);
+-    } else {
+-        mp_cmd_msg(cmd, MSGL_ERR, "Taking screenshot failed.");
+-    }
+-
+-    talloc_free(image);
++    (void)p;
+ }
+ 
+ void cmd_screenshot_raw(void *p)
+ {
+-    struct mp_cmd_ctx *cmd = p;
+-    struct MPContext *mpctx = cmd->mpctx;
+-    struct mpv_node *res = &cmd->result;
+-
+-    const enum mp_imgfmt formats[] = {IMGFMT_BGR0, IMGFMT_BGRA, IMGFMT_RGBA, IMGFMT_RGBA64};
+-    const char *format_names[] = {"bgr0", "bgra", "rgba", "rgba64"};
+-    int idx = cmd->args[1].v.i;
+-    mp_assert(idx >= 0 && idx <= 3);
+-
+-    bool high_depth = formats[idx] == IMGFMT_RGBA64;
+-    struct mp_image *img = screenshot_get_rgb(mpctx, cmd->args[0].v.i,
+-                                              high_depth, formats[idx]);
+-    if (!img) {
+-        cmd->success = false;
+-        return;
+-    }
+-
+-    node_init(res, MPV_FORMAT_NODE_MAP, NULL);
+-    node_map_add_int64(res, "w", img->w);
+-    node_map_add_int64(res, "h", img->h);
+-    node_map_add_int64(res, "stride", img->stride[0]);
+-    node_map_add_string(res, "format", format_names[idx]);
+-    struct mpv_byte_array *ba =
+-        node_map_add(res, "data", MPV_FORMAT_BYTE_ARRAY)->u.ba;
+-    *ba = (struct mpv_byte_array){
+-        .data = img->planes[0],
+-        .size = img->stride[0] * img->h,
+-    };
+-    talloc_steal(ba, img);
+-}
+-
+-static void screenshot_fin(struct mp_cmd_ctx *cmd)
+-{
+-    void **a = cmd->on_completion_priv;
+-    struct MPContext *mpctx = a[0];
+-    struct mp_waiter *waiter = a[1];
+-
+-    mp_waiter_wakeup(waiter, 0);
+-    mp_wakeup_core(mpctx);
+-}
+-
+-void handle_each_frame_screenshot(struct MPContext *mpctx)
+-{
+-    screenshot_ctx *ctx = mpctx->screenshot_ctx;
+-
+-    if (!ctx->each_frame)
+-        return;
+-
+-    if (ctx->last_frame_count == mpctx->shown_vframes)
+-        return;
+-    ctx->last_frame_count = mpctx->shown_vframes;
+-
+-    struct mp_waiter wait = MP_WAITER_INITIALIZER;
+-    void *a[] = {mpctx, &wait};
+-    run_command(mpctx, mp_cmd_clone(ctx->each_frame), NULL, screenshot_fin, a);
+-
+-    // Block (in a reentrant way) until the screenshot was written. Otherwise,
+-    // we could pile up screenshot requests forever.
+-    while (!mp_waiter_poll(&wait))
+-        mp_idle(mpctx);
+-
+-    mp_waiter_wait(&wait);
++    (void)p;
+ }
+diff --git a/sub/dec_sub.c b/sub/dec_sub.c
+index 118221a..f8df195 100644
+--- a/sub/dec_sub.c
++++ b/sub/dec_sub.c
+@@ -38,7 +38,6 @@ extern const struct sd_functions sd_ass;
+ extern const struct sd_functions sd_lavc;
+ 
+ static const struct sd_functions *const sd_list[] = {
+-    &sd_lavc,
+     &sd_ass,
+     NULL
+ };
+diff --git a/sub/draw_bmp.c b/sub/draw_bmp.c
+index fe72a74..19e9f1b 100644
+--- a/sub/draw_bmp.c
++++ b/sub/draw_bmp.c
+@@ -1,4 +1,14 @@
+ /*
++ * RN_MEDIA_STRIP_DEAD_V1
++ *
++ * No-op stub of sub/draw_bmp.c for an audio-only build (sid=no, vo=null,
++ * no OSD/subtitle bitmap rendering). draw_bmp.h is kept UNCHANGED. The
++ * staying file sub/osd.c references mp_draw_sub_formats / mp_draw_sub_alloc
++ * / mp_draw_sub_bitmaps; other (conditional, not-compiled) VOs reference
++ * mp_draw_sub_overlay / mp_draw_sub_get_dbg_info / mp_draw_sub_alloc_test.
++ * All are provided here as no-ops / failures: no subtitle bitmaps are ever
++ * produced (sid=no), so these are unreachable at runtime.
++ *
+  * This file is part of mpv.
+  *
+  * mpv is free software; you can redistribute it and/or
+@@ -17,981 +27,39 @@
+ 
+ #include <stddef.h>
+ #include <stdbool.h>
+-#include <assert.h>
+-#include <math.h>
+-#include <inttypes.h>
+ 
+-#include "common/common.h"
+ #include "draw_bmp.h"
+-#include "img_convert.h"
+-#include "video/mp_image.h"
+-#include "video/repack.h"
+-#include "video/sws_utils.h"
+-#include "video/img_format.h"
+-#include "video/csputils.h"
+-
+-const bool mp_draw_sub_formats[SUBBITMAP_COUNT] = {
+-    [SUBBITMAP_LIBASS] = true,
+-    [SUBBITMAP_BGRA] = true,
+-};
+-
+-struct part {
+-    int change_id;
+-    // Sub-bitmaps scaled to final sizes.
+-    int num_imgs;
+-    struct mp_image **imgs;
+-};
+-
+-// Must be a power of 2. Height is 1, but mark_rect() effectively operates on
+-// multiples of chroma sized macro-pixels. (E.g. 4:2:0 -> every second line is
+-// the same as the previous one, and x0%2==x1%2==0.)
+-#define SLICE_W 256u
+-
+-// Whether to scale in tiles. Faster, but can't use correct chroma position.
+-// Should be a runtime option. SLICE_W is used as tile width. The tile size
+-// should probably be small; too small or too big will cause overhead when
+-// scaling.
+-#define SCALE_IN_TILES 1
+-#define TILE_H 4u
+-
+-struct slice {
+-    uint16_t x0, x1;
+-};
+-
+-struct mp_draw_sub_cache
+-{
+-    struct mpv_global *global;
+-
+-    // Possibly cached parts. Also implies what's in the video_overlay.
+-    struct part parts[MAX_OSD_PARTS];
+-    int64_t change_id;
+-
+-    struct mp_image_params params;  // target image params
+-
+-    int w, h;                       // like params.w/h, but rounded up to chroma
+-    unsigned align_x, align_y;      // alignment for all video pixels
+-
+-    struct mp_image *rgba_overlay;  // all OSD in RGBA
+-    struct mp_image *video_overlay; // rgba_overlay converted to video colorspace
+-    struct mp_image *alpha_overlay; // alpha plane ref. to video_overlay
+-    struct mp_image *calpha_overlay; // alpha_overlay scaled to chroma plane size
+-
+-    unsigned s_w;                   // number of slices per line
+-    struct slice *slices;           // slices[y * s_w + x / SLICE_W]
+-    bool any_osd;
+-
+-    struct mp_sws_context *rgba_to_overlay; // scaler for rgba -> video csp.
+-    struct mp_sws_context *alpha_to_calpha; // scaler for overlay -> calpha
+-    bool scale_in_tiles;
+-
+-    struct mp_sws_context *sub_scale; // scaler for SUBBITMAP_BGRA
+-
+-    struct mp_repack *overlay_to_f32; // convert video_overlay to float
+-    struct mp_image *overlay_tmp;   // slice in float32
+-
+-    struct mp_repack *calpha_to_f32; // convert video_overlay to float
+-    struct mp_image *calpha_tmp;    // slice in float32
+-
+-    struct mp_repack *video_to_f32; // convert video to float
+-    struct mp_repack *video_from_f32; // convert float back to video
+-    struct mp_image *video_tmp;     // slice in float32
+-
+-    struct mp_sws_context *premul;  // video -> premultiplied video
+-    struct mp_sws_context *unpremul; // reverse
+-    struct mp_image *premul_tmp;
+-
+-    // Function that works on the _f32 data.
+-    void (*blend_line)(void *dst, void *src, void *src_a, int w);
+-
+-    struct mp_image res_overlay;    // returned by mp_draw_sub_overlay()
+-};
+-
+-static void blend_line_f32(void *dst, void *src, void *src_a, int w)
+-{
+-    float *dst_f = dst;
+-    float *src_f = src;
+-    float *src_a_f = src_a;
+-
+-    for (int x = 0; x < w; x++)
+-        dst_f[x] = src_f[x] + dst_f[x] * (1.0f - src_a_f[x]);
+-}
+-
+-static void blend_line_u8(void *dst, void *src, void *src_a, int w)
+-{
+-    uint8_t *dst_i = dst;
+-    uint8_t *src_i = src;
+-    uint8_t *src_a_i = src_a;
+-
+-    for (int x = 0; x < w; x++)
+-        dst_i[x] = src_i[x] + dst_i[x] * (255u - src_a_i[x]) / 255u;
+-}
+-
+-static void blend_slice(struct mp_draw_sub_cache *p)
+-{
+-    struct mp_image *ov = p->overlay_tmp;
+-    struct mp_image *ca = p->calpha_tmp;
+-    struct mp_image *vid = p->video_tmp;
+-
+-    for (int plane = 0; plane < vid->num_planes; plane++) {
+-        int xs = vid->fmt.xs[plane];
+-        int ys = vid->fmt.ys[plane];
+-        int h = (1 << vid->fmt.chroma_ys) - (1 << ys) + 1;
+-        int cw = mp_chroma_div_up(vid->w, xs);
+-        for (int y = 0; y < h; y++) {
+-            p->blend_line(mp_image_pixel_ptr_ny(vid, plane, 0, y),
+-                          mp_image_pixel_ptr_ny(ov, plane, 0, y),
+-                          xs || ys ? mp_image_pixel_ptr_ny(ca, 0, 0, y)
+-                            : mp_image_pixel_ptr_ny(ov, ov->num_planes - 1, 0, y),
+-                          cw);
+-        }
+-    }
+-}
+-
+-static bool blend_overlay_with_video(struct mp_draw_sub_cache *p,
+-                                     struct mp_image *dst)
+-{
+-    if (!repack_config_buffers(p->video_to_f32, 0, p->video_tmp, 0, dst, NULL))
+-        return false;
+-    if (!repack_config_buffers(p->video_from_f32, 0, dst, 0, p->video_tmp, NULL))
+-        return false;
+-
+-    int xs = dst->fmt.chroma_xs;
+-    int ys = dst->fmt.chroma_ys;
+-
+-    for (int y = 0; y < dst->h; y += p->align_y) {
+-        struct slice *line = &p->slices[y * p->s_w];
+-
+-        for (int sx = 0; sx < p->s_w; sx++) {
+-            struct slice *s = &line[sx];
+-
+-            int w = s->x1 - s->x0;
+-            if (w <= 0)
+-                continue;
+-            int x = sx * SLICE_W + s->x0;
+-
+-            mp_assert(MP_IS_ALIGNED(x, p->align_x));
+-            mp_assert(MP_IS_ALIGNED(w, p->align_x));
+-            mp_assert(x + w <= p->w);
+-
+-            repack_line(p->overlay_to_f32, 0, 0, x, y, w);
+-            repack_line(p->video_to_f32, 0, 0, x, y, w);
+-            if (p->calpha_to_f32)
+-                repack_line(p->calpha_to_f32, 0, 0, x >> xs, y >> ys, w >> xs);
+-
+-            blend_slice(p);
+-
+-            repack_line(p->video_from_f32, x, y, 0, 0, w);
+-        }
+-    }
+-
+-    return true;
+-}
+-
+-static bool convert_overlay_part(struct mp_draw_sub_cache *p,
+-                                 int x0, int y0, int w, int h)
+-{
+-    struct mp_image src = *p->rgba_overlay;
+-    struct mp_image dst = *p->video_overlay;
+-
+-    mp_image_crop(&src, x0, y0, x0 + w, y0 + h);
+-    mp_image_crop(&dst, x0, y0, x0 + w, y0 + h);
+-
+-    if (mp_sws_scale(p->rgba_to_overlay, &dst, &src) < 0)
+-        return false;
+-
+-    if (p->calpha_overlay) {
+-        src = *p->alpha_overlay;
+-        dst = *p->calpha_overlay;
+-
+-        int xs = p->video_overlay->fmt.chroma_xs;
+-        int ys = p->video_overlay->fmt.chroma_ys;
+-        mp_image_crop(&src, x0, y0, x0 + w, y0 + h);
+-        mp_image_crop(&dst, x0 >> xs, y0 >> ys, (x0 + w) >> xs, (y0 + h) >> ys);
+-
+-        if (mp_sws_scale(p->alpha_to_calpha, &dst, &src) < 0)
+-            return false;
+-    }
+-
+-    return true;
+-}
+-
+-static bool convert_to_video_overlay(struct mp_draw_sub_cache *p)
+-{
+-    if (!p->video_overlay)
+-        return true;
+-
+-    if (p->scale_in_tiles) {
+-        int t_h = p->rgba_overlay->h / TILE_H;
+-        for (int ty = 0; ty < t_h; ty++) {
+-            for (int sx = 0; sx < p->s_w; sx++) {
+-                struct slice *s = &p->slices[ty * TILE_H * p->s_w + sx];
+-                bool pixels_set = false;
+-                for (int y = 0; y < TILE_H; y++) {
+-                    if (s[0].x0 < s[0].x1) {
+-                        pixels_set = true;
+-                        break;
+-                    }
+-                    s += p->s_w;
+-                }
+-                if (!pixels_set)
+-                    continue;
+-                if (!convert_overlay_part(p, sx * SLICE_W, ty * TILE_H,
+-                                          SLICE_W, TILE_H))
+-                    return false;
+-            }
+-        }
+-    } else {
+-        if (!convert_overlay_part(p, 0, 0, p->rgba_overlay->w, p->rgba_overlay->h))
+-            return false;
+-    }
+-
+-    return true;
+-}
+-
+-// Mark the given rectangle of pixels as possibly non-transparent.
+-// The rectangle must have been pre-clipped.
+-static void mark_rect(struct mp_draw_sub_cache *p, int x0, int y0, int x1, int y1)
+-{
+-    x0 = MP_ALIGN_DOWN(x0, p->align_x);
+-    y0 = MP_ALIGN_DOWN(y0, p->align_y);
+-    x1 = MP_ALIGN_UP(x1, p->align_x);
+-    y1 = MP_ALIGN_UP(y1, p->align_y);
+-
+-    mp_assert(x0 >= 0 && x0 <= x1 && x1 <= p->w);
+-    mp_assert(y0 >= 0 && y0 <= y1 && y1 <= p->h);
+-
+-    const int sx0 = x0 / SLICE_W;
+-    const int sx1 = MPMIN(x1 / SLICE_W, p->s_w - 1);
+-
+-    for (int y = y0; y < y1; y++) {
+-        struct slice *line = &p->slices[y * p->s_w];
+-
+-        struct slice *s0 = &line[sx0];
+-        struct slice *s1 = &line[sx1];
+-
+-        s0->x0 = MPMIN(s0->x0, x0 % SLICE_W);
+-        s1->x1 = MPMAX(s1->x1, ((x1 - 1) % SLICE_W) + 1);
+-
+-        if (s0 != s1) {
+-            s0->x1 = SLICE_W;
+-            s1->x0 = 0;
+-
+-            for (int x = sx0 + 1; x < sx1; x++) {
+-                struct slice *s = &line[x];
+-                s->x0 = 0;
+-                s->x1 = SLICE_W;
+-            }
+-        }
+-
+-        // Ensure the very last slice does not extend
+-        // beyond the total width.
+-        struct slice *last_s = &line[p->s_w - 1];
+-        last_s->x1 = MPMIN(p->w - ((p->s_w - 1) * SLICE_W), last_s->x1);
+-
+-        p->any_osd = true;
+-    }
+-}
+-
+-static void draw_ass_rgba(uint8_t *dst, ptrdiff_t dst_stride,
+-                          uint8_t *src, ptrdiff_t src_stride,
+-                          int w, int h, uint32_t color)
+-{
+-    const unsigned int r = (color >> 24) & 0xff;
+-    const unsigned int g = (color >> 16) & 0xff;
+-    const unsigned int b = (color >>  8) & 0xff;
+-    const unsigned int a = 0xff - (color & 0xff);
+-
+-    for (int y = 0; y < h; y++) {
+-        uint32_t *dstrow = (uint32_t *) dst;
+-        for (int x = 0; x < w; x++) {
+-            const unsigned int v = src[x];
+-            unsigned int aa = a * v;
+-            uint32_t dstpix = dstrow[x];
+-            unsigned int dstb =  dstpix        & 0xFF;
+-            unsigned int dstg = (dstpix >>  8) & 0xFF;
+-            unsigned int dstr = (dstpix >> 16) & 0xFF;
+-            unsigned int dsta = (dstpix >> 24) & 0xFF;
+-            dstb = (v * b * a   + dstb * (255 * 255 - aa)) / (255 * 255);
+-            dstg = (v * g * a   + dstg * (255 * 255 - aa)) / (255 * 255);
+-            dstr = (v * r * a   + dstr * (255 * 255 - aa)) / (255 * 255);
+-            dsta = (aa * 255    + dsta * (255 * 255 - aa)) / (255 * 255);
+-            dstrow[x] = dstb | (dstg << 8) | (dstr << 16) | (dsta << 24);
+-        }
+-        dst += dst_stride;
+-        src += src_stride;
+-    }
+-}
+-
+-static void render_ass(struct mp_draw_sub_cache *p, struct sub_bitmaps *sb)
+-{
+-    mp_assert(sb->format == SUBBITMAP_LIBASS);
+-
+-    for (int i = 0; i < sb->num_parts; i++) {
+-        struct sub_bitmap *s = &sb->parts[i];
+-
+-        draw_ass_rgba(mp_image_pixel_ptr(p->rgba_overlay, 0, s->x, s->y),
+-                      p->rgba_overlay->stride[0], s->bitmap, s->stride,
+-                      s->w, s->h, s->libass.color);
+-
+-        mark_rect(p, s->x, s->y, s->x + s->w, s->y + s->h);
+-    }
+-}
+-
+-static void draw_rgba(uint8_t *dst, ptrdiff_t dst_stride,
+-                      uint8_t *src, ptrdiff_t src_stride, int w, int h)
+-{
+-    for (int y = 0; y < h; y++) {
+-        uint32_t *srcrow = (uint32_t *)src;
+-        uint32_t *dstrow = (uint32_t *)dst;
+-        for (int x = 0; x < w; x++) {
+-            uint32_t srcpix = srcrow[x];
+-            uint32_t dstpix = dstrow[x];
+-            unsigned int srcb =  srcpix        & 0xFF;
+-            unsigned int srcg = (srcpix >>  8) & 0xFF;
+-            unsigned int srcr = (srcpix >> 16) & 0xFF;
+-            unsigned int srca = (srcpix >> 24) & 0xFF;
+-            unsigned int dstb =  dstpix        & 0xFF;
+-            unsigned int dstg = (dstpix >>  8) & 0xFF;
+-            unsigned int dstr = (dstpix >> 16) & 0xFF;
+-            unsigned int dsta = (dstpix >> 24) & 0xFF;
+-            dstb = srcb + dstb * (255 * 255 - srca) / (255 * 255);
+-            dstg = srcg + dstg * (255 * 255 - srca) / (255 * 255);
+-            dstr = srcr + dstr * (255 * 255 - srca) / (255 * 255);
+-            dsta = srca + dsta * (255 * 255 - srca) / (255 * 255);
+-            dstrow[x] = dstb | (dstg << 8) | (dstr << 16) | (dsta << 24);
+-        }
+-        dst += dst_stride;
+-        src += src_stride;
+-    }
+-}
+-
+-static bool render_rgba(struct mp_draw_sub_cache *p, struct part *part,
+-                        struct sub_bitmaps *sb)
+-{
+-    mp_assert(sb->format == SUBBITMAP_BGRA);
+-
+-    if (part->change_id != sb->change_id) {
+-        for (int n = 0; n < part->num_imgs; n++)
+-            talloc_free(part->imgs[n]);
+-        part->num_imgs = sb->num_parts;
+-        MP_TARRAY_GROW(p, part->imgs, part->num_imgs);
+-        for (int n = 0; n < part->num_imgs; n++)
+-            part->imgs[n] = NULL;
+-
+-        part->change_id = sb->change_id;
+-    }
+-
+-    for (int i = 0; i < sb->num_parts; i++) {
+-        struct sub_bitmap *s = &sb->parts[i];
+-
+-        // Clipping is rare but necessary.
+-        int sx0 = s->x;
+-        int sy0 = s->y;
+-        int sx1 = s->x + s->dw;
+-        int sy1 = s->y + s->dh;
+-
+-        int x0 = MPCLAMP(sx0, 0, p->w);
+-        int y0 = MPCLAMP(sy0, 0, p->h);
+-        int x1 = MPCLAMP(sx1, 0, p->w);
+-        int y1 = MPCLAMP(sy1, 0, p->h);
+-
+-        int dw = x1 - x0;
+-        int dh = y1 - y0;
+-        if (dw <= 0 || dh <= 0)
+-            continue;
+-
+-        // We clip the source instead of the scaled image, because that might
+-        // avoid excessive memory usage when applying a ridiculous scale factor,
+-        // even if that stretches it to up to 1 pixel due to integer rounding.
+-        int sx = 0;
+-        int sy = 0;
+-        int sw = s->w;
+-        int sh = s->h;
+-        if (x0 != sx0 || y0 != sy0 || x1 != sx1 || y1 != sy1) {
+-            double fx = s->dw / (double)s->w;
+-            double fy = s->dh / (double)s->h;
+-            sx = MPCLAMP((x0 - sx0) / fx, 0, s->w);
+-            sy = MPCLAMP((y0 - sy0) / fy, 0, s->h);
+-            sw = MPCLAMP(dw / fx, 1, s->w);
+-            sh = MPCLAMP(dh / fy, 1, s->h);
+-        }
+-
+-        mp_assert(sx >= 0 && sw > 0 && sx + sw <= s->w);
+-        mp_assert(sy >= 0 && sh > 0 && sy + sh <= s->h);
+-
+-        ptrdiff_t s_stride = s->stride;
+-        void *s_ptr = (char *)s->bitmap + s_stride * sy + sx * 4;
+-
+-        if (dw != sw || dh != sh) {
+-            struct mp_image *scaled = part->imgs[i];
+-
+-            if (!scaled) {
+-                struct mp_image src_img = {0};
+-                mp_image_setfmt(&src_img, IMGFMT_BGRA);
+-                mp_image_set_size(&src_img, sw, sh);
+-                src_img.planes[0] = s_ptr;
+-                src_img.stride[0] = s_stride;
+-                src_img.params.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+-
+-                scaled = mp_image_alloc(IMGFMT_BGRA, dw, dh);
+-                if (!scaled)
+-                    return false;
+-                part->imgs[i] = talloc_steal(p, scaled);
+-                mp_image_copy_attributes(scaled, &src_img);
+-
+-                if (mp_sws_scale(p->sub_scale, scaled, &src_img) < 0)
+-                    return false;
+-            }
+-
+-            mp_assert(scaled->w == dw);
+-            mp_assert(scaled->h == dh);
+-
+-            s_stride = scaled->stride[0];
+-            s_ptr = scaled->planes[0];
+-        }
+-
+-        draw_rgba(mp_image_pixel_ptr(p->rgba_overlay, 0, x0, y0),
+-                  p->rgba_overlay->stride[0], s_ptr, s_stride, dw, dh);
+-
+-        mark_rect(p, x0, y0, x1, y1);
+-    }
+-
+-    return true;
+-}
+-
+-static bool render_sb(struct mp_draw_sub_cache *p, struct sub_bitmaps *sb)
+-{
+-    struct part *part = &p->parts[sb->render_index];
+-
+-    switch (sb->format) {
+-    case SUBBITMAP_LIBASS:
+-        render_ass(p, sb);
+-        return true;
+-    case SUBBITMAP_BGRA:
+-        return render_rgba(p, part, sb);
+-    }
+-
+-    return false;
+-}
+-
+-static void clear_rgba_overlay(struct mp_draw_sub_cache *p)
+-{
+-    mp_assert(p->rgba_overlay->imgfmt == IMGFMT_BGRA);
+-
+-    for (int y = 0; y < p->rgba_overlay->h; y++) {
+-        uint32_t *px = mp_image_pixel_ptr(p->rgba_overlay, 0, 0, y);
+-        struct slice *line = &p->slices[y * p->s_w];
+-
+-        for (int sx = 0; sx < p->s_w; sx++) {
+-            struct slice *s = &line[sx];
+-
+-            // Ensure this final slice doesn't extend beyond the width of p->s_w
+-            if (s->x1 == SLICE_W && sx == p->s_w - 1 && y == p->rgba_overlay->h - 1)
+-                s->x1 = MPMIN(p->w - ((p->s_w - 1) * SLICE_W), s->x1);
+ 
+-            if (s->x0 <= s->x1) {
+-                memset(px + s->x0, 0, (s->x1 - s->x0) * 4);
+-                *s = (struct slice){SLICE_W, 0};
+-            }
+-
+-            px += SLICE_W;
+-        }
+-    }
+-
+-    p->any_osd = false;
+-}
+-
+-static struct mp_sws_context *alloc_scaler(struct mp_draw_sub_cache *p)
+-{
+-    struct mp_sws_context *s = mp_sws_alloc(p);
+-    mp_sws_enable_cmdline_opts(s, p->global);
+-    return s;
+-}
+-
+-static void init_general(struct mp_draw_sub_cache *p)
+-{
+-    p->sub_scale = alloc_scaler(p);
+-
+-    p->s_w = MP_ALIGN_UP(p->rgba_overlay->w, SLICE_W) / SLICE_W;
+-
+-    p->slices = talloc_zero_array(p, struct slice, p->s_w * p->rgba_overlay->h);
+-
+-    mp_image_clear(p->rgba_overlay, 0, 0, p->w, p->h);
+-    clear_rgba_overlay(p);
+-}
+-
+-static bool reinit_to_video(struct mp_draw_sub_cache *p)
+-{
+-    struct mp_image_params *params = &p->params;
+-    mp_image_params_guess_csp(params);
+-
+-    bool need_premul = params->repr.alpha != PL_ALPHA_PREMULTIPLIED &&
+-        (mp_imgfmt_get_desc(params->imgfmt).flags & MP_IMGFLAG_ALPHA);
+-
+-    // Intermediate format for video_overlay. Requirements:
+-    //  - same subsampling as video
+-    //  - uses video colorspace
+-    //  - has alpha
+-    //  - repacker support (to the format used in p->blend_line)
+-    //  - probably 8 bit per component rather than something wasteful or strange
+-    struct mp_regular_imgfmt vfdesc = {0};
+-
+-    int rflags = REPACK_CREATE_EXPAND_8BIT;
+-    bool use_shortcut = false;
+-
+-    p->video_to_f32 = mp_repack_create_planar(params->imgfmt, false, rflags);
+-    talloc_steal(p, p->video_to_f32);
+-    if (!p->video_to_f32)
+-        return false;
+-    mp_get_regular_imgfmt(&vfdesc, mp_repack_get_format_dst(p->video_to_f32));
+-    mp_assert(vfdesc.num_planes); // must have succeeded
+-
+-    if (params->repr.sys == PL_COLOR_SYSTEM_RGB && vfdesc.num_planes >= 3) {
+-        use_shortcut = true;
+-
+-        if (vfdesc.component_type == MP_COMPONENT_TYPE_UINT &&
+-            vfdesc.component_size == 1 && vfdesc.component_pad == 0)
+-            p->blend_line = blend_line_u8;
+-    }
+-
+-    // If no special blender is available, blend in float.
+-    if (!p->blend_line) {
+-        TA_FREEP(&p->video_to_f32);
+-
+-        rflags |= REPACK_CREATE_PLANAR_F32;
+-
+-        p->video_to_f32 = mp_repack_create_planar(params->imgfmt, false, rflags);
+-        talloc_steal(p, p->video_to_f32);
+-        if (!p->video_to_f32)
+-            return false;
+-
+-        mp_get_regular_imgfmt(&vfdesc, mp_repack_get_format_dst(p->video_to_f32));
+-        mp_assert(vfdesc.component_type == MP_COMPONENT_TYPE_FLOAT);
+-
+-        p->blend_line = blend_line_f32;
+-    }
+-
+-    p->scale_in_tiles = SCALE_IN_TILES;
+-
+-    int vid_f32_fmt = mp_repack_get_format_dst(p->video_to_f32);
+-
+-    p->video_from_f32 = mp_repack_create_planar(params->imgfmt, true, rflags);
+-    talloc_steal(p, p->video_from_f32);
+-    if (!p->video_from_f32)
+-        return false;
+-
+-    mp_assert(mp_repack_get_format_dst(p->video_to_f32) ==
+-           mp_repack_get_format_src(p->video_from_f32));
+-
+-    int overlay_fmt = 0;
+-    if (use_shortcut) {
+-        // No point in doing anything fancy.
+-        overlay_fmt = IMGFMT_BGRA;
+-        p->scale_in_tiles = false;
+-    } else {
+-        struct mp_regular_imgfmt odesc = vfdesc;
+-        // Just use 8 bit as well (should be fine, may use less memory).
+-        odesc.component_type = MP_COMPONENT_TYPE_UINT;
+-        odesc.component_size = 1;
+-        odesc.component_pad = 0;
+-
+-        // Ensure there's alpha.
+-        if (odesc.planes[odesc.num_planes - 1].components[0] != 4) {
+-            if (odesc.num_planes >= 4)
+-                return false; // wat
+-            odesc.planes[odesc.num_planes++] =
+-                (struct mp_regular_imgfmt_plane){1, {4}};
+-        }
+-
+-        overlay_fmt = mp_find_regular_imgfmt(&odesc);
+-        p->scale_in_tiles = odesc.chroma_xs || odesc.chroma_ys;
+-    }
+-    if (!overlay_fmt)
+-        return false;
+-
+-    p->overlay_to_f32 = mp_repack_create_planar(overlay_fmt, false, rflags);
+-    talloc_steal(p, p->overlay_to_f32);
+-    if (!p->overlay_to_f32)
+-        return false;
+-
+-    int render_fmt = mp_repack_get_format_dst(p->overlay_to_f32);
+-
+-    struct mp_regular_imgfmt ofdesc = {0};
+-    mp_get_regular_imgfmt(&ofdesc, render_fmt);
+-
+-    if (ofdesc.planes[ofdesc.num_planes - 1].components[0] != 4)
+-        return false;
+-
+-    // The formats must be the same, minus possible lack of alpha in vfdesc.
+-    if (ofdesc.num_planes != vfdesc.num_planes &&
+-        ofdesc.num_planes - 1 != vfdesc.num_planes)
+-        return false;
+-    for (int n = 0; n < vfdesc.num_planes; n++) {
+-        if (vfdesc.planes[n].components[0] != ofdesc.planes[n].components[0])
+-            return false;
+-    }
+-
+-    p->align_x = mp_repack_get_align_x(p->video_to_f32);
+-    p->align_y = mp_repack_get_align_y(p->video_to_f32);
+-
+-    mp_assert(p->align_x >= mp_repack_get_align_x(p->overlay_to_f32));
+-    mp_assert(p->align_y >= mp_repack_get_align_y(p->overlay_to_f32));
+-
+-    if (p->align_x > SLICE_W || p->align_y > TILE_H)
+-        return false;
+-
+-    p->w = MP_ALIGN_UP(params->w, p->align_x);
+-    int slice_h = p->align_y;
+-    p->h = MP_ALIGN_UP(params->h, slice_h);
+-
+-    // Size of the overlay. If scaling in tiles, round up to tiles, so we don't
+-    // need to reinit the scale for right/bottom tiles.
+-    int w = p->w;
+-    int h = p->h;
+-    if (p->scale_in_tiles) {
+-        w = MP_ALIGN_UP(w, SLICE_W);
+-        h = MP_ALIGN_UP(h, TILE_H);
+-    }
+-
+-    p->rgba_overlay = talloc_steal(p, mp_image_alloc(IMGFMT_BGRA, w, h));
+-    p->overlay_tmp = talloc_steal(p, mp_image_alloc(render_fmt, SLICE_W, slice_h));
+-    p->video_tmp = talloc_steal(p, mp_image_alloc(vid_f32_fmt, SLICE_W, slice_h));
+-    if (!p->rgba_overlay || !p->overlay_tmp || !p->video_tmp)
+-        return false;
+-
+-    mp_image_params_guess_csp(&p->rgba_overlay->params);
+-    p->rgba_overlay->params.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+-
+-    p->overlay_tmp->params.repr = params->repr;
+-    p->overlay_tmp->params.color = params->color;
+-    p->video_tmp->params.repr = params->repr;
+-    p->video_tmp->params.color = params->color;
+-
+-    if (p->rgba_overlay->imgfmt == overlay_fmt) {
+-        if (!repack_config_buffers(p->overlay_to_f32, 0, p->overlay_tmp,
+-                                   0, p->rgba_overlay, NULL))
+-            return false;
+-    } else {
+-        // Generally non-RGB.
+-        p->video_overlay = talloc_steal(p, mp_image_alloc(overlay_fmt, w, h));
+-        if (!p->video_overlay)
+-            return false;
+-
+-        p->video_overlay->params.repr = params->repr;
+-        p->video_overlay->params.color = params->color;
+-        p->video_overlay->params.chroma_location = params->chroma_location;
+-        p->video_overlay->params.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+-
+-        if (p->scale_in_tiles)
+-            p->video_overlay->params.chroma_location = PL_CHROMA_CENTER;
+-
+-        p->rgba_to_overlay = alloc_scaler(p);
+-        p->rgba_to_overlay->allow_zimg = true;
+-        if (!mp_sws_supports_formats(p->rgba_to_overlay,
+-                            p->video_overlay->imgfmt, p->rgba_overlay->imgfmt))
+-            return false;
+-
+-        if (!repack_config_buffers(p->overlay_to_f32, 0, p->overlay_tmp,
+-                                   0, p->video_overlay, NULL))
+-            return false;
+-
+-        // Setup a scaled alpha plane if chroma-subsampling is present.
+-        int xs = p->video_overlay->fmt.chroma_xs;
+-        int ys = p->video_overlay->fmt.chroma_ys;
+-        if (xs || ys) {
+-            // Require float so format selection becomes simpler (maybe).
+-            mp_assert(rflags & REPACK_CREATE_PLANAR_F32);
+-
+-            // For extracting the alpha plane, construct a gray format that is
+-            // compatible with the alpha one.
+-            struct mp_regular_imgfmt odesc = {0};
+-            mp_get_regular_imgfmt(&odesc, overlay_fmt);
+-            mp_assert(odesc.component_size);
+-            int aplane = odesc.num_planes - 1;
+-            mp_assert(odesc.planes[aplane].num_components == 1);
+-            mp_assert(odesc.planes[aplane].components[0] == 4);
+-            struct mp_regular_imgfmt cadesc = odesc;
+-            cadesc.num_planes = 1;
+-            cadesc.planes[0] = (struct mp_regular_imgfmt_plane){1, {1}};
+-            cadesc.chroma_xs = cadesc.chroma_ys = 0;
+-
+-            int calpha_fmt = mp_find_regular_imgfmt(&cadesc);
+-            if (!calpha_fmt)
+-                return false;
+-
+-            // Unscaled alpha plane from p->video_overlay.
+-            p->alpha_overlay = talloc_zero(p, struct mp_image);
+-            mp_image_setfmt(p->alpha_overlay, calpha_fmt);
+-            mp_image_set_size(p->alpha_overlay, w, h);
+-            p->alpha_overlay->planes[0] = p->video_overlay->planes[aplane];
+-            p->alpha_overlay->stride[0] = p->video_overlay->stride[aplane];
+-
+-            // Full range gray always has the same range as alpha.
+-            p->alpha_overlay->params.repr.levels = PL_COLOR_LEVELS_FULL;
+-            mp_image_params_guess_csp(&p->alpha_overlay->params);
+-
+-            p->calpha_overlay =
+-                talloc_steal(p, mp_image_alloc(calpha_fmt, w >> xs, h >> ys));
+-            if (!p->calpha_overlay)
+-                return false;
+-            p->calpha_overlay->params.repr = p->alpha_overlay->params.repr;
+-            p->calpha_overlay->params.color = p->alpha_overlay->params.color;
+-
+-            p->calpha_to_f32 = mp_repack_create_planar(calpha_fmt, false, rflags);
+-            talloc_steal(p, p->calpha_to_f32);
+-            if (!p->calpha_to_f32)
+-                return false;
+-
+-            int af32_fmt = mp_repack_get_format_dst(p->calpha_to_f32);
+-            p->calpha_tmp = talloc_steal(p, mp_image_alloc(af32_fmt, SLICE_W, 1));
+-            if (!p->calpha_tmp)
+-                return false;
+-
+-            if (!repack_config_buffers(p->calpha_to_f32, 0, p->calpha_tmp,
+-                                       0, p->calpha_overlay, NULL))
+-                return false;
+-
+-            p->alpha_to_calpha = alloc_scaler(p);
+-            if (!mp_sws_supports_formats(p->alpha_to_calpha,
+-                                         calpha_fmt, calpha_fmt))
+-                return false;
+-        }
+-    }
+-
+-    if (need_premul) {
+-        p->premul = alloc_scaler(p);
+-        p->unpremul = alloc_scaler(p);
+-        p->premul_tmp = mp_image_alloc(params->imgfmt, params->w, params->h);
+-        talloc_steal(p, p->premul_tmp);
+-        if (!p->premul_tmp)
+-            return false;
+-        mp_image_set_params(p->premul_tmp, params);
+-        p->premul_tmp->params.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+-
+-        // Only zimg supports this.
+-        p->premul->force_scaler = MP_SWS_ZIMG;
+-        p->unpremul->force_scaler = MP_SWS_ZIMG;
+-    }
+-
+-    init_general(p);
+-
+-    return true;
+-}
+-
+-static bool reinit_to_overlay(struct mp_draw_sub_cache *p)
+-{
+-    p->align_x = 1;
+-    p->align_y = 1;
+-
+-    p->w = p->params.w;
+-    p->h = p->params.h;
+-
+-    p->rgba_overlay = talloc_steal(p, mp_image_alloc(IMGFMT_BGRA, p->w, p->h));
+-    if (!p->rgba_overlay)
+-        return false;
+-
+-    mp_image_params_guess_csp(&p->rgba_overlay->params);
+-    p->rgba_overlay->params.repr.alpha = PL_ALPHA_PREMULTIPLIED;
+-
+-    // Some non-sense with the intention to somewhat isolate the returned image.
+-    mp_image_setfmt(&p->res_overlay, p->rgba_overlay->imgfmt);
+-    mp_image_set_size(&p->res_overlay, p->rgba_overlay->w, p->rgba_overlay->h);
+-    mp_image_copy_attributes(&p->res_overlay, p->rgba_overlay);
+-    p->res_overlay.planes[0] = p->rgba_overlay->planes[0];
+-    p->res_overlay.stride[0] = p->rgba_overlay->stride[0];
+-
+-    init_general(p);
+-
+-    // Mark all dirty (for full reinit of user state).
+-    for (int y = 0; y < p->rgba_overlay->h; y++) {
+-        for (int sx = 0; sx < p->s_w; sx++)
+-            p->slices[y * p->s_w + sx] = (struct slice){0, SLICE_W};
+-    }
+-
+-    return true;
+-}
+-
+-static bool check_reinit(struct mp_draw_sub_cache *p,
+-                         struct mp_image_params *params, bool to_video)
+-{
+-    if (!mp_image_params_equal(&p->params, params) || !p->rgba_overlay) {
+-        talloc_free_children(p);
+-        *p = (struct mp_draw_sub_cache){.global = p->global, .params = *params};
+-        if (!(to_video ? reinit_to_video(p) : reinit_to_overlay(p))) {
+-            talloc_free_children(p);
+-            *p = (struct mp_draw_sub_cache){.global = p->global};
+-            return false;
+-        }
+-    }
+-    return true;
+-}
+-
+-char *mp_draw_sub_get_dbg_info(struct mp_draw_sub_cache *p)
+-{
+-    mp_assert(p);
+-
+-    return talloc_asprintf(NULL,
+-        "align=%d:%d ov=%-7s, ov_f=%s, v_f=%s, a=%s, ca=%s, ca_f=%s",
+-        p->align_x, p->align_y,
+-        mp_imgfmt_to_name(p->video_overlay ? p->video_overlay->imgfmt : 0),
+-        mp_imgfmt_to_name(p->overlay_tmp->imgfmt),
+-        mp_imgfmt_to_name(p->video_tmp->imgfmt),
+-        mp_imgfmt_to_name(p->alpha_overlay ? p->alpha_overlay->imgfmt : 0),
+-        mp_imgfmt_to_name(p->calpha_overlay ? p->calpha_overlay->imgfmt : 0),
+-        mp_imgfmt_to_name(p->calpha_tmp ? p->calpha_tmp->imgfmt : 0));
+-}
++/* osd.c passes this as the list of sub-bitmap formats the renderer accepts.
++ * All-false means "render nothing", which is correct without a renderer. */
++const bool mp_draw_sub_formats[SUBBITMAP_COUNT] = {0};
+ 
+ struct mp_draw_sub_cache *mp_draw_sub_alloc(void *ta_parent, struct mpv_global *g)
+ {
+-    struct mp_draw_sub_cache *c = talloc_zero(ta_parent, struct mp_draw_sub_cache);
+-    c->global = g;
+-    return c;
++    (void)ta_parent; (void)g;
++    return NULL;
+ }
+ 
+-// For tests.
+ struct mp_draw_sub_cache *mp_draw_sub_alloc_test(struct mp_image *dst)
+ {
+-    struct mp_draw_sub_cache *c = talloc_zero(NULL, struct mp_draw_sub_cache);
+-    reinit_to_video(c);
+-    return c;
++    (void)dst;
++    return NULL;
+ }
+ 
+-bool mp_draw_sub_bitmaps(struct mp_draw_sub_cache *p, struct mp_image *dst,
++bool mp_draw_sub_bitmaps(struct mp_draw_sub_cache *cache, struct mp_image *dst,
+                          struct sub_bitmap_list *sbs_list)
+ {
+-    bool ok = false;
+-
+-    // dst must at least be as large as the bounding box, or you may get memory
+-    // corruption.
+-    mp_assert(dst->w >= sbs_list->w);
+-    mp_assert(dst->h >= sbs_list->h);
+-
+-    if (!check_reinit(p, &dst->params, true))
+-        return false;
+-
+-    if (p->change_id != sbs_list->change_id) {
+-        p->change_id = sbs_list->change_id;
+-
+-        clear_rgba_overlay(p);
+-
+-        for (int n = 0; n < sbs_list->num_items; n++) {
+-            if (!render_sb(p, sbs_list->items[n]))
+-                goto done;
+-        }
+-
+-        if (!convert_to_video_overlay(p))
+-            goto done;
+-    }
+-
+-    if (p->any_osd) {
+-        struct mp_image *target = dst;
+-        if (p->premul_tmp) {
+-            if (mp_sws_scale(p->premul, p->premul_tmp, dst) < 0)
+-                goto done;
+-            target = p->premul_tmp;
+-        }
+-
+-        if (!blend_overlay_with_video(p, target))
+-            goto done;
+-
+-        if (target != dst) {
+-            if (mp_sws_scale(p->unpremul, dst, p->premul_tmp) < 0)
+-                goto done;
+-        }
+-    }
+-
+-    ok = true;
+-
+-done:
+-    return ok;
+-}
+-
+-// Bounding boxes for mp_draw_sub_overlay() API. For simplicity, each rectangle
+-// covers a fixed tile on the screen, starts out empty, but is not extended
+-// beyond the tile. In the simplest case, there's only 1 rect/tile for everything.
+-struct rc_grid {
+-    unsigned w, h;                  // size in grid tiles
+-    unsigned r_w, r_h;              // size of a grid tile in pixels
+-    struct mp_rect *rcs;            // rcs[x * w + y]
+-};
+-
+-static void init_rc_grid(struct rc_grid *gr, struct mp_draw_sub_cache *p,
+-                         struct mp_rect *rcs, int max_rcs)
+-{
+-    *gr = (struct rc_grid){ .w = max_rcs ? 1 : 0, .h = max_rcs ? 1 : 0,
+-                            .rcs = rcs, .r_w = p->s_w * SLICE_W, .r_h = p->h, };
+-
+-    // Dumb iteration to figure out max. size because I'm stupid.
+-    bool more = true;
+-    while (more) {
+-        more = false;
+-        if (gr->r_h >= 128) {
+-            if (gr->w * gr->h * 2 > max_rcs)
+-                break;
+-            gr->h *= 2;
+-            gr->r_h = (p->h + gr->h - 1) / gr->h;
+-            more = true;
+-        }
+-        if (gr->r_w >= SLICE_W * 2) {
+-            if (gr->w * gr->h * 2 > max_rcs)
+-                break;
+-            gr->w *= 2;
+-            gr->r_w = (p->s_w + gr->w - 1) / gr->w * SLICE_W;
+-            more = true;
+-        }
+-    }
+-
+-    mp_assert(gr->r_h * gr->h >= p->h);
+-    mp_assert(!(gr->r_w & (SLICE_W - 1)));
+-    mp_assert(gr->r_w * gr->w >= p->w);
+-
+-    // Init with empty (degenerate) rectangles.
+-    for (int y = 0; y < gr->h; y++) {
+-        for (int x = 0; x < gr->w; x++) {
+-            struct mp_rect *rc = &gr->rcs[y * gr->w + x];
+-            rc->x1 = x * gr->r_w;
+-            rc->y1 = y * gr->r_h;
+-            rc->x0 = rc->x1 + gr->r_w;
+-            rc->y0 = rc->y1 + gr->r_h;
+-        }
+-    }
+-}
+-
+-// Extend given grid with contents of p->slices.
+-static void mark_rcs(struct mp_draw_sub_cache *p, struct rc_grid *gr)
+-{
+-    for (int y = 0; y < p->h; y++) {
+-        struct slice *line = &p->slices[y * p->s_w];
+-        struct mp_rect *rcs = &gr->rcs[y / gr->r_h * gr->w];
+-
+-        for (int sx = 0; sx < p->s_w; sx++) {
+-            struct slice *s = &line[sx];
+-            if (s->x0 < s->x1) {
+-                unsigned xpos = sx * SLICE_W;
+-                struct mp_rect *rc = &rcs[xpos / gr->r_w];
+-                rc->y0 = MPMIN(rc->y0, y);
+-                rc->y1 = MPMAX(rc->y1, y + 1);
+-                rc->x0 = MPMIN(rc->x0, xpos + s->x0);
+-                // Ensure this does not extend beyond the total width
+-                rc->x1 = MPCLAMP(xpos + s->x1, rc->x1, p->w);
+-            }
+-        }
+-    }
++    (void)cache; (void)dst; (void)sbs_list;
++    return false;
+ }
+ 
+-// Remove empty RCs, and return rc count.
+-static int return_rcs(struct rc_grid *gr)
++char *mp_draw_sub_get_dbg_info(struct mp_draw_sub_cache *c)
+ {
+-    int num = 0, cnt = gr->w * gr->h;
+-    for (int n = 0; n < cnt; n++) {
+-        struct mp_rect *rc = &gr->rcs[n];
+-        if (rc->x0 < rc->x1 && rc->y0 < rc->y1)
+-            gr->rcs[num++] = *rc;
+-    }
+-    return num;
++    (void)c;
++    return NULL;
+ }
+ 
+-struct mp_image *mp_draw_sub_overlay(struct mp_draw_sub_cache *p,
++struct mp_image *mp_draw_sub_overlay(struct mp_draw_sub_cache *cache,
+                                      struct sub_bitmap_list *sbs_list,
+                                      struct mp_rect *act_rcs,
+                                      int max_act_rcs,
+@@ -1000,40 +68,12 @@ struct mp_image *mp_draw_sub_overlay(struct mp_draw_sub_cache *p,
+                                      int max_mod_rcs,
+                                      int *num_mod_rcs)
+ {
+-    *num_act_rcs = 0;
+-    *num_mod_rcs = 0;
+-
+-    struct mp_image_params params = {.w = sbs_list->w, .h = sbs_list->h};
+-    if (!check_reinit(p, &params, false))
+-        return NULL;
+-
+-    struct rc_grid gr_act, gr_mod;
+-    init_rc_grid(&gr_act, p, act_rcs, max_act_rcs);
+-    init_rc_grid(&gr_mod, p, mod_rcs, max_mod_rcs);
+-
+-    if (p->change_id != sbs_list->change_id) {
+-        p->change_id = sbs_list->change_id;
+-
+-        mark_rcs(p, &gr_mod);
+-
+-        clear_rgba_overlay(p);
+-
+-        for (int n = 0; n < sbs_list->num_items; n++) {
+-            if (!render_sb(p, sbs_list->items[n])) {
+-                p->change_id = 0;
+-                return NULL;
+-            }
+-        }
+-
+-        mark_rcs(p, &gr_mod);
+-    }
+-
+-    mark_rcs(p, &gr_act);
+-
+-    *num_act_rcs = return_rcs(&gr_act);
+-    *num_mod_rcs = return_rcs(&gr_mod);
+-
+-    return &p->res_overlay;
++    (void)cache; (void)sbs_list;
++    (void)act_rcs; (void)max_act_rcs;
++    (void)mod_rcs; (void)max_mod_rcs;
++    if (num_act_rcs)
++        *num_act_rcs = 0;
++    if (num_mod_rcs)
++        *num_mod_rcs = 0;
++    return NULL;
+ }
+-
+-// vim: ts=4 sw=4 et tw=80
+diff --git a/video/image_writer.c b/video/image_writer.c
+index f3c9777..dca75f2 100644
+--- a/video/image_writer.c
++++ b/video/image_writer.c
+@@ -1,4 +1,18 @@
+ /*
++ * RN_MEDIA_STRIP_DEAD_V1
++ *
++ * Stub of video/image_writer.c for an audio-only build (no screenshot, no
++ * vo_image encode, no mpv-side image decode). image_writer.h is kept
++ * UNCHANGED. Provides every symbol the surviving build references:
++ *   - image_writer_opts[] / image_writer_opts_defaults / struct
++ *     image_writer_opts : consumed by options/options.c (screenshot_conf
++ *     OPT_SUBSTRUCT). Reproduced verbatim — pure option data — so option
++ *     parsing is unchanged.
++ *   - image_writer_file_ext / image_writer_high_depth /
++ *     image_writer_flexible_csp / image_writer_format_from_ext / write_image
++ *     / dump_png : no-ops / failures. Their callers (screenshot, vo_image)
++ *     are stubbed / removed in the same patch.
++ *
+  * This file is part of mpv.
+  *
+  * mpv is free software; you can redistribute it and/or
+@@ -15,40 +29,13 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <inttypes.h>
+-
+-#include <libavcodec/avcodec.h>
+-#include <libavformat/avformat.h>
+-#include <libavutil/mem.h>
+-#include <libavutil/opt.h>
+-#include <libavutil/pixdesc.h>
+-#include <libplacebo/utils/libav.h>
+-
+-#include "common/msg.h"
+-#include "config.h"
++#include <stdbool.h>
++#include <stddef.h>
+ 
+-#if HAVE_JPEG
+-#include <setjmp.h>
+-#include <jpeglib.h>
+-#endif
+-
+-#include "osdep/io.h"
+-#include "misc/path_utils.h"
+-
+-#include "common/av_common.h"
+-#include "common/msg.h"
+-#include "image_writer.h"
+-#include "mpv_talloc.h"
+-#include "misc/lavc_compat.h"
+-#include "video/fmt-conversion.h"
+-#include "video/img_format.h"
+-#include "video/mp_image.h"
+-#include "video/sws_utils.h"
++#include <libavcodec/codec_id.h>
+ 
+ #include "options/m_option.h"
++#include "image_writer.h"
+ 
+ const struct image_writer_opts image_writer_opts_defaults = {
+     .format = AV_CODEC_ID_MJPEG,
+@@ -71,7 +58,7 @@ const struct image_writer_opts image_writer_opts_defaults = {
+     .tag_csp = true,
+ };
+ 
+-const struct m_opt_choice_alternatives mp_image_writer_formats[] = {
++static const struct m_opt_choice_alternatives mp_image_writer_formats[] = {
+     {"jpg",  AV_CODEC_ID_MJPEG},
+     {"jpeg", AV_CODEC_ID_MJPEG},
+     {"png",  AV_CODEC_ID_PNG},
+@@ -102,646 +89,40 @@ const struct m_option image_writer_opts[] = {
+     {0},
+ };
+ 
+-struct image_writer_ctx {
+-    struct mp_log *log;
+-    const struct image_writer_opts *opts;
+-    struct mp_imgfmt_desc original_format;
+-};
+-
+-static enum AVPixelFormat replace_j_format(enum AVPixelFormat fmt)
+-{
+-    switch (fmt) {
+-    case AV_PIX_FMT_YUV420P: return AV_PIX_FMT_YUVJ420P;
+-    case AV_PIX_FMT_YUV422P: return AV_PIX_FMT_YUVJ422P;
+-    case AV_PIX_FMT_YUV444P: return AV_PIX_FMT_YUVJ444P;
+-    }
+-    return fmt;
+-}
+-
+-static void prepare_avframe(AVFrame *pic, AVCodecContext *avctx,
+-                            mp_image_t *image, bool tag_csp,
+-                            struct mp_log *log)
+-{
+-    for (int n = 0; n < 4; n++) {
+-        pic->data[n] = image->planes[n];
+-        pic->linesize[n] = image->stride[n];
+-    }
+-    pic->format = avctx->pix_fmt;
+-    pic->width = avctx->width;
+-    pic->height = avctx->height;
+-    pl_avframe_set_repr(pic, image->params.repr);
+-    avctx->colorspace = pic->colorspace;
+-    avctx->color_range = pic->color_range;
+-
+-    if (!tag_csp)
+-        return;
+-    pl_avframe_set_color(pic, image->params.color);
+-    avctx->color_primaries = pic->color_primaries;
+-    avctx->color_trc = pic->color_trc;
+-    avctx->chroma_sample_location = pic->chroma_location =
+-        pl_chroma_to_av(image->params.chroma_location);
+-
+-    mp_dbg(log, "mapped color params:\n"
+-        "  trc = %s\n"
+-        "  primaries = %s\n"
+-        "  range = %s\n"
+-        "  colorspace = %s\n"
+-        "  chroma_location = %s\n",
+-        av_color_transfer_name(avctx->color_trc),
+-        av_color_primaries_name(avctx->color_primaries),
+-        av_color_range_name(avctx->color_range),
+-        av_color_space_name(avctx->colorspace),
+-        av_chroma_location_name(avctx->chroma_sample_location)
+-    );
+-}
+-
+-static bool write_lavc(struct image_writer_ctx *ctx, mp_image_t *image, FILE *fp)
+-{
+-    bool success = false;
+-    AVFrame *pic = NULL;
+-    AVPacket *pkt = NULL;
+-
+-    const AVCodec *codec;
+-    if (ctx->opts->format == AV_CODEC_ID_WEBP) {
+-        codec = avcodec_find_encoder_by_name("libwebp"); // non-animated encoder
+-    } else {
+-        codec = avcodec_find_encoder(ctx->opts->format);
+-    }
+-
+-    AVCodecContext *avctx = NULL;
+-    if (!codec)
+-        goto print_open_fail;
+-    avctx = avcodec_alloc_context3(codec);
+-    if (!avctx)
+-        goto print_open_fail;
+-
+-    MP_VERBOSE(ctx, "Using encoder %s\n", codec->name);
+-
+-    avctx->time_base = AV_TIME_BASE_Q;
+-    avctx->width = image->w;
+-    avctx->height = image->h;
+-    avctx->pix_fmt = imgfmt2pixfmt(image->imgfmt);
+-
+-    /*
+-     * tagging avctx->bits_per_raw_sample indicates the number of significant
+-     * bits. For example, if the original video was 10-bit, and the GPU buffer is
+-     * 16-bit, this tells lavc that only 10 bits are significant. lavc encoders may
+-     * ignore this value, but some codecs can make use of it (for example, PNG's
+-     * sBIT chunk or JXL's bit depth header)
+-     *
+-     * This only works when screenshot-sw=yes is set. With hardware screenshots,
+-     * the "original" is whatever is in the GPU buffer, which is likely to be at
+-     * full bit depth already.
+-     */
+-    if (image->params.repr.bits.color_depth != image->params.repr.bits.sample_depth) {
+-        MP_DBG(ctx, "tagging bits_per_raw_sample=%d\n", image->params.repr.bits.color_depth);
+-        avctx->bits_per_raw_sample = image->params.repr.bits.color_depth;
+-    }
+-
+-    if (codec->id == AV_CODEC_ID_MJPEG) {
+-        // Annoying deprecated garbage for the jpg encoder.
+-        if (image->params.repr.levels == PL_COLOR_LEVELS_FULL)
+-            avctx->pix_fmt = replace_j_format(avctx->pix_fmt);
+-    }
+-    if (avctx->pix_fmt == AV_PIX_FMT_NONE) {
+-        MP_ERR(ctx, "Image format %s not supported by lavc.\n",
+-               mp_imgfmt_to_name(image->imgfmt));
+-        goto error_exit;
+-    }
+-
+-    if (codec->id == AV_CODEC_ID_MJPEG) {
+-        avctx->flags |= AV_CODEC_FLAG_QSCALE;
+-        // jpeg_quality is set below
+-    } else if (codec->id == AV_CODEC_ID_PNG) {
+-        avctx->compression_level = ctx->opts->png_compression;
+-        av_opt_set_int(avctx, "pred", ctx->opts->png_filter,
+-                       AV_OPT_SEARCH_CHILDREN);
+-    } else if (codec->id == AV_CODEC_ID_WEBP) {
+-        avctx->compression_level = ctx->opts->webp_compression;
+-        av_opt_set_int(avctx, "lossless", ctx->opts->webp_lossless,
+-                       AV_OPT_SEARCH_CHILDREN);
+-        av_opt_set_int(avctx, "quality", ctx->opts->webp_quality,
+-                       AV_OPT_SEARCH_CHILDREN);
+-    } else if (codec->id == AV_CODEC_ID_JPEGXL) {
+-        av_opt_set_double(avctx, "distance", ctx->opts->jxl_distance,
+-                          AV_OPT_SEARCH_CHILDREN);
+-        av_opt_set_int(avctx, "effort", ctx->opts->jxl_effort,
+-                       AV_OPT_SEARCH_CHILDREN);
+-    }
+-
+-    if (avcodec_open2(avctx, codec, NULL) < 0) {
+-    print_open_fail:
+-        MP_ERR(ctx, "Could not open libavcodec encoder for saving images\n");
+-        goto error_exit;
+-    }
+-
+-    pic = av_frame_alloc();
+-    if (!pic)
+-        goto error_exit;
+-    prepare_avframe(pic, avctx, image, ctx->opts->tag_csp, ctx->log);
+-    if (codec->id == AV_CODEC_ID_MJPEG) {
+-        int qscale = 1 + (100 - ctx->opts->jpeg_quality) * 30 / 100;
+-        pic->quality = qscale * FF_QP2LAMBDA;
+-    }
+-
+-    int ret = avcodec_send_frame(avctx, pic);
+-    if (ret < 0)
+-        goto error_exit;
+-    ret = avcodec_send_frame(avctx, NULL); // send EOF
+-    if (ret < 0)
+-        goto error_exit;
+-    pkt = av_packet_alloc();
+-    if (!pkt)
+-        goto error_exit;
+-    ret = avcodec_receive_packet(avctx, pkt);
+-    if (ret < 0)
+-        goto error_exit;
+-
+-    success = fwrite(pkt->data, pkt->size, 1, fp) == 1;
+-
+-error_exit:
+-    avcodec_free_context(&avctx);
+-    av_frame_free(&pic);
+-    av_packet_free(&pkt);
+-    return success;
+-}
+-
+-#if HAVE_JPEG
+-
+-static void write_jpeg_error_exit(j_common_ptr cinfo)
+-{
+-    // NOTE: do not write error message, too much effort to connect the libjpeg
+-    //       log callbacks with mplayer's log function mp_msp()
+-
+-    // Return control to the setjmp point
+-    longjmp(*(jmp_buf*)cinfo->client_data, 1);
+-}
+-
+-static bool write_jpeg(struct image_writer_ctx *ctx, mp_image_t *image, FILE *fp)
+-{
+-    struct jpeg_compress_struct cinfo;
+-    struct jpeg_error_mgr jerr;
+-
+-    cinfo.err = jpeg_std_error(&jerr);
+-    jerr.error_exit = write_jpeg_error_exit;
+-
+-    jmp_buf error_return_jmpbuf;
+-    cinfo.client_data = &error_return_jmpbuf;
+-    if (setjmp(cinfo.client_data)) {
+-        jpeg_destroy_compress(&cinfo);
+-        return false;
+-    }
+-
+-    jpeg_create_compress(&cinfo);
+-    jpeg_stdio_dest(&cinfo, fp);
+-
+-    cinfo.image_width = image->w;
+-    cinfo.image_height = image->h;
+-    cinfo.input_components = 3;
+-    cinfo.in_color_space = JCS_RGB;
+-
+-    cinfo.write_JFIF_header = TRUE;
+-    cinfo.JFIF_major_version = 1;
+-    cinfo.JFIF_minor_version = 2;
+-
+-    jpeg_set_defaults(&cinfo);
+-    jpeg_set_quality(&cinfo, ctx->opts->jpeg_quality, 0);
+-
+-    if (ctx->opts->jpeg_source_chroma) {
+-        cinfo.comp_info[0].h_samp_factor = 1 << ctx->original_format.chroma_xs;
+-        cinfo.comp_info[0].v_samp_factor = 1 << ctx->original_format.chroma_ys;
+-    }
+-
+-    jpeg_start_compress(&cinfo, TRUE);
+-
+-    while (cinfo.next_scanline < cinfo.image_height) {
+-        JSAMPROW row_pointer[1];
+-        row_pointer[0] = image->planes[0] +
+-                         (ptrdiff_t)cinfo.next_scanline * image->stride[0];
+-        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+-    }
+-
+-    jpeg_finish_compress(&cinfo);
+-
+-    jpeg_destroy_compress(&cinfo);
+-
+-    return true;
+-}
+-
+-#endif
+-
+-static void log_side_data(struct image_writer_ctx *ctx, AVPacketSideData *data,
+-                          size_t size)
+-{
+-    if (!mp_msg_test(ctx->log, MSGL_DEBUG))
+-        return;
+-    char dbgbuff[129];
+-    if (size)
+-        MP_DBG(ctx, "write_avif() packet side data:\n");
+-    for (int i = 0; i < size; i++) {
+-        AVPacketSideData *sd = &data[i];
+-        for (int k = 0; k < MPMIN(sd->size, 64); k++)
+-            snprintf(dbgbuff + k*2, 3, "%02x", (int)sd->data[k]);
+-        MP_DBG(ctx, "  [%d] = {[%s], '%s'}\n",
+-               i, av_packet_side_data_name(sd->type), dbgbuff);
+-    }
+-}
+-
+-static bool write_avif(struct image_writer_ctx *ctx, mp_image_t *image, FILE *fp)
+-{
+-    const AVCodec *codec = NULL;
+-    const AVOutputFormat *ofmt = NULL;
+-    AVCodecContext *avctx = NULL;
+-    AVIOContext *avioctx = NULL;
+-    AVFormatContext *fmtctx = NULL;
+-    AVStream *stream = NULL;
+-    AVFrame *pic = NULL;
+-    AVPacket *pkt = NULL;
+-    int ret;
+-    bool success = false;
+-
+-    codec = avcodec_find_encoder_by_name(ctx->opts->avif_encoder);
+-    if (!codec) {
+-        MP_ERR(ctx, "Could not find encoder '%s', for saving images\n",
+-               ctx->opts->avif_encoder);
+-        goto free_data;
+-    }
+-
+-    ofmt = av_guess_format("avif", NULL, NULL);
+-    if (!ofmt) {
+-        MP_ERR(ctx, "Could not guess output format 'avif'\n");
+-        goto free_data;
+-    }
+-
+-    avctx = avcodec_alloc_context3(codec);
+-    if (!avctx) {
+-        MP_ERR(ctx, "Failed to allocate AVContext.\n");
+-        goto free_data;
+-    }
+-
+-    avctx->width = image->w;
+-    avctx->height = image->h;
+-    avctx->time_base = (AVRational){1, 30};
+-    avctx->pkt_timebase = (AVRational){1, 30};
+-    avctx->codec_type = AVMEDIA_TYPE_VIDEO;
+-    avctx->pix_fmt = imgfmt2pixfmt(image->imgfmt);
+-    if (avctx->pix_fmt == AV_PIX_FMT_NONE) {
+-        MP_ERR(ctx, "Image format %s not supported by lavc.\n",
+-               mp_imgfmt_to_name(image->imgfmt));
+-        goto free_data;
+-    }
+-
+-    av_opt_set_int(avctx, "still-picture", 1, AV_OPT_SEARCH_CHILDREN);
+-
+-    AVDictionary *avd = NULL;
+-    mp_set_avdict(&avd, ctx->opts->avif_opts);
+-    av_opt_set_dict2(avctx, &avd, AV_OPT_SEARCH_CHILDREN);
+-    av_dict_free(&avd);
+-
+-    pic = av_frame_alloc();
+-    if (!pic) {
+-        MP_ERR(ctx, "Could not allocate AVFrame\n");
+-        goto free_data;
+-    }
+-
+-    prepare_avframe(pic, avctx, image, ctx->opts->tag_csp, ctx->log);
+-    // Not setting this flag caused ffmpeg to output avif that was not passing
+-    // standard checks but ffmpeg would still read and not complain...
+-    avctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+-
+-    ret = avcodec_open2(avctx, codec, NULL);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Could not open libavcodec encoder for saving images\n");
+-        goto free_data;
+-    }
+-
+-    avio_open_dyn_buf(&avioctx);
+-    MP_HANDLE_OOM(avioctx);
+-
+-    fmtctx = avformat_alloc_context();
+-    if (!fmtctx) {
+-        MP_ERR(ctx, "Could not allocate format context\n");
+-        goto free_data;
+-    }
+-    fmtctx->pb = avioctx;
+-    fmtctx->oformat = ofmt;
+-
+-    stream = avformat_new_stream(fmtctx, codec);
+-    if (!stream) {
+-        MP_ERR(ctx, "Could not allocate stream\n");
+-        goto free_data;
+-    }
+-
+-    ret = avcodec_parameters_from_context(stream->codecpar, avctx);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Could not copy parameters from context\n");
+-        goto free_data;
+-    }
+-
+-    ret = avformat_init_output(fmtctx, NULL);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Could not initialize output\n");
+-        goto free_data;
+-    }
+-
+-    ret = avformat_write_header(fmtctx, NULL);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Could not write format header\n");
+-        goto free_data;
+-    }
+-
+-    pkt = av_packet_alloc();
+-    if (!pkt) {
+-        MP_ERR(ctx, "Could not allocate packet\n");
+-        goto free_data;
+-    }
+-
+-    ret = avcodec_send_frame(avctx, pic);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Error sending frame\n");
+-        goto free_data;
+-    }
+-    ret = avcodec_send_frame(avctx, NULL); // send EOF
+-    if (ret < 0)
+-        goto free_data;
+-
+-    int pts = 0;
+-    log_side_data(ctx, avctx->coded_side_data, avctx->nb_coded_side_data);
+-    while (ret >= 0) {
+-        ret = avcodec_receive_packet(avctx, pkt);
+-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+-            break;
+-        if (ret < 0) {
+-            MP_ERR(ctx, "Error receiving packet\n");
+-            goto free_data;
+-        }
+-        pkt->dts = pkt->pts = ++pts;
+-        pkt->stream_index = stream->index;
+-        log_side_data(ctx, pkt->side_data, pkt->side_data_elems);
+-
+-        ret = av_write_frame(fmtctx, pkt);
+-        if (ret < 0) {
+-            MP_ERR(ctx, "Error writing frame\n");
+-            goto free_data;
+-        }
+-        av_packet_unref(pkt);
+-    }
+-
+-    ret = av_write_trailer(fmtctx);
+-    if (ret < 0) {
+-        MP_ERR(ctx, "Could not write trailer\n");
+-        goto free_data;
+-    }
+-    MP_DBG(ctx, "write_avif(): avio_size() = %"PRIi64"\n", avio_size(avioctx));
+-
+-    uint8_t *buf = NULL;
+-    int written_size = avio_close_dyn_buf(avioctx, &buf);
+-    success = fwrite(buf, written_size, 1, fp) == 1;
+-    av_freep(&buf);
+-
+-free_data:
+-    avformat_free_context(fmtctx);
+-    avcodec_free_context(&avctx);
+-    av_packet_free(&pkt);
+-    av_frame_free(&pic);
+-
+-    return success;
+-}
+-
+-static int get_encoder_format(const AVCodec *codec, int srcfmt, bool highdepth)
+-{
+-    const enum AVPixelFormat *pix_fmts;
+-    int ret = mp_avcodec_get_supported_config(NULL, codec,
+-                                              AV_CODEC_CONFIG_PIX_FORMAT,
+-                                              (const void **)&pix_fmts);
+-    int current = 0;
+-    for (int n = 0; ret >= 0 && pix_fmts && pix_fmts[n] != AV_PIX_FMT_NONE; n++) {
+-        int fmt = pixfmt2imgfmt(pix_fmts[n]);
+-        if (!fmt)
+-            continue;
+-        if (!highdepth) {
+-            // Ignore formats larger than 8 bit per pixel. (Or which are unknown.)
+-            struct mp_regular_imgfmt rdesc;
+-            if (!mp_get_regular_imgfmt(&rdesc, fmt)) {
+-                int ofmt = mp_find_other_endian(fmt);
+-                if (!mp_get_regular_imgfmt(&rdesc, ofmt))
+-                    continue;
+-            }
+-            if (rdesc.component_size > 1)
+-                continue;
+-        }
+-        current = current ? mp_imgfmt_select_best(current, fmt, srcfmt) : fmt;
+-    }
+-    return current;
+-}
+-
+-static int get_target_format(struct image_writer_ctx *ctx)
+-{
+-    const AVCodec *codec = avcodec_find_encoder(ctx->opts->format);
+-    if (!codec)
+-        goto unknown;
+-
+-    int srcfmt = ctx->original_format.id;
+-
+-    int target = get_encoder_format(codec, srcfmt, ctx->opts->high_bit_depth);
+-    if (!target) {
+-        mp_dbg(ctx->log, "Falling back to high-depth format.\n");
+-        target = get_encoder_format(codec, srcfmt, true);
+-    }
+-
+-    if (!target)
+-        goto unknown;
+-
+-    return target;
+-
+-unknown:
+-    return IMGFMT_RGB0;
+-}
+-
+ const char *image_writer_file_ext(const struct image_writer_opts *opts)
+ {
+-    struct image_writer_opts defs = image_writer_opts_defaults;
+-
+-    if (!opts)
+-        opts = &defs;
+-
+-    return m_opt_choice_str(mp_image_writer_formats, opts->format);
++    (void)opts;
++    return "jpg";
+ }
+ 
+ bool image_writer_high_depth(const struct image_writer_opts *opts)
+ {
+-    return opts->format == AV_CODEC_ID_PNG
+-           || opts->format == AV_CODEC_ID_JPEGXL
+-           || opts->format == AV_CODEC_ID_AV1;
++    (void)opts;
++    return false;
+ }
+ 
+ bool image_writer_flexible_csp(const struct image_writer_opts *opts)
+ {
+-    if (!opts->tag_csp)
+-        return false;
+-    return opts->format == AV_CODEC_ID_JPEGXL
+-        || opts->format == AV_CODEC_ID_AV1
+-        || opts->format == AV_CODEC_ID_PNG;
++    (void)opts;
++    return false;
+ }
+ 
+ int image_writer_format_from_ext(const char *ext)
+ {
+-    for (int n = 0; mp_image_writer_formats[n].name; n++) {
+-        if (ext && strcmp(mp_image_writer_formats[n].name, ext) == 0)
+-            return mp_image_writer_formats[n].value;
+-    }
++    (void)ext;
+     return 0;
+ }
+ 
+-static struct mp_image *convert_image(struct mp_image *image, int destfmt,
+-                                      enum pl_color_levels yuv_levels,
+-                                      const struct image_writer_opts *opts,
+-                                      struct mpv_global *global,
+-                                      struct mp_log *log)
+-{
+-    int d_w, d_h;
+-    mp_image_params_get_dsize(&image->params, &d_w, &d_h);
+-
+-    struct mp_image_params p = {
+-        .imgfmt = destfmt,
+-        .w = d_w,
+-        .h = d_h,
+-        .p_w = 1,
+-        .p_h = 1,
+-        .color = image->params.color,
+-        .repr = image->params.repr,
+-        .chroma_location = image->params.chroma_location,
+-        .crop = {0, 0, d_w, d_h},
+-    };
+-    mp_image_params_guess_csp(&p);
+-
+-    if (!image_writer_flexible_csp(opts)) {
+-        // If our format can't tag csps, set something sane
+-        p.color.primaries = PL_COLOR_PRIM_BT_709;
+-        p.color.transfer = PL_COLOR_TRC_UNKNOWN;
+-        p.light = MP_CSP_LIGHT_DISPLAY;
+-        p.color.hdr = (struct pl_hdr_metadata){0};
+-        if (p.repr.sys != PL_COLOR_SYSTEM_RGB) {
+-            p.repr.levels = yuv_levels;
+-            p.repr.sys = PL_COLOR_SYSTEM_BT_601;
+-            p.chroma_location = PL_CHROMA_CENTER;
+-        }
+-        mp_image_params_guess_csp(&p);
+-    }
+-
+-    if (mp_image_params_equal(&p, &image->params))
+-        return mp_image_new_ref(image);
+-
+-    mp_verbose(log, "converted: %s\n", mp_image_params_to_str(&p));
+-
+-    struct mp_image *src = image;
+-    if (mp_image_crop_valid(&src->params) &&
+-        (mp_rect_w(src->params.crop) != src->w ||
+-         mp_rect_h(src->params.crop) != src->h))
+-    {
+-        src = mp_image_new_ref(src);
+-        if (!src) {
+-            mp_err(log, "mp_image_new_ref failed!\n");
+-            return NULL;
+-        }
+-        mp_image_crop_rc(src, src->params.crop);
+-    }
+-
+-    struct mp_image *dst = mp_image_alloc(p.imgfmt, p.w, p.h);
+-    if (!dst) {
+-        mp_err(log, "Out of memory.\n");
+-        return NULL;
+-    }
+-    mp_image_copy_attributes(dst, src);
+-
+-    dst->params = p;
+-
+-    struct mp_sws_context *sws = mp_sws_alloc(NULL);
+-    sws->log = log;
+-    if (global)
+-        mp_sws_enable_cmdline_opts(sws, global);
+-    bool ok = mp_sws_scale(sws, dst, src) >= 0;
+-    talloc_free(sws);
+-
+-    if (src != image)
+-        talloc_free(src);
+-
+-    if (!ok) {
+-        mp_err(log, "Error when converting image.\n");
+-        talloc_free(dst);
+-        return NULL;
+-    }
+-
+-    return dst;
+-}
+-
+ bool write_image(struct mp_image *image, const struct image_writer_opts *opts,
+                  const char *filename, struct mpv_global *global,
+                  struct mp_log *log, bool overwrite)
+ {
+-    struct image_writer_opts defs = image_writer_opts_defaults;
+-    if (!opts)
+-        opts = &defs;
+-
+-    mp_verbose(log, "input: %s\n", mp_image_params_to_str(&image->params));
+-
+-    struct image_writer_ctx ctx = { log, opts, image->fmt };
+-    bool (*write)(struct image_writer_ctx *, mp_image_t *, FILE *) = write_lavc;
+-    int destfmt = 0;
+-
+-#if HAVE_JPEG
+-    if (opts->format == AV_CODEC_ID_MJPEG) {
+-        write = write_jpeg;
+-        destfmt = IMGFMT_RGB24;
+-    }
+-#endif
+-    if (opts->format == AV_CODEC_ID_AV1) {
+-        write = write_avif;
+-        if (opts->avif_pixfmt && opts->avif_pixfmt[0])
+-            destfmt = mp_imgfmt_from_name(bstr0(opts->avif_pixfmt));
+-    } else if (opts->format == AV_CODEC_ID_WEBP && !opts->webp_lossless) {
+-        // For lossy images, libwebp has its own RGB->YUV conversion.
+-        // We don't want that, so force YUV/YUVA here.
+-        int alpha = image->fmt.flags & MP_IMGFLAG_ALPHA;
+-        destfmt = alpha ? pixfmt2imgfmt(AV_PIX_FMT_YUVA420P) : IMGFMT_420P;
+-    }
+-
+-    if (!destfmt)
+-        destfmt = get_target_format(&ctx);
+-
+-    enum pl_color_levels levels; // Ignored if destfmt is a RGB format
+-    if (opts->format == AV_CODEC_ID_WEBP) {
+-        levels = PL_COLOR_LEVELS_LIMITED;
+-    } else {
+-        levels = PL_COLOR_LEVELS_FULL;
+-    }
+-
+-    struct mp_image *dst = convert_image(image, destfmt, levels, opts, global, log);
+-    if (!dst)
+-        return false;
+-
+-    bool success = false;
+-    FILE *fp = fopen(filename, overwrite ? "wb" : "wbx");
+-    if (!fp) {
+-        mp_err(log, "Error creating '%s' for writing: %s!\n",
+-               filename, mp_strerror(errno));
+-        goto done;
+-    }
+-
+-    success = write(&ctx, dst, fp);
+-    if (fclose(fp) || !success) {
+-        mp_err(log, "Error writing file '%s'!\n", filename);
+-        unlink(filename);
+-    }
+-
+-done:
+-    talloc_free(dst);
+-    return success;
++    (void)image; (void)opts; (void)filename;
++    (void)global; (void)log; (void)overwrite;
++    return false;
+ }
+ 
+ void dump_png(struct mp_image *image, const char *filename, struct mp_log *log)
+ {
+-    struct image_writer_opts opts = image_writer_opts_defaults;
+-    opts.format = AV_CODEC_ID_PNG;
+-    write_image(image, &opts, filename, NULL, log, true);
++    (void)image; (void)filename; (void)log;
+ }
+diff --git a/video/out/stub_gpu.c b/video/out/stub_gpu.c
+new file mode 100644
+index 0000000..bb539fe
+--- /dev/null
++++ b/video/out/stub_gpu.c
+@@ -0,0 +1,108 @@
++/*
++ * RN_MEDIA_STRIP_DEAD_V1
++ *
++ * Auto-generated by patch_strip_mpv_dead.py — replacement stubs for the
++ * GPU / shader render stack removed from this audio-only libmpv build
++ * (HAVE_GL=0, HAVE_VULKAN=0, vo=null). Provides only the symbols from the
++ * removed video/out/gpu TUs that are still referenced by code which
++ * stays compiled:
++ *
++ *   options/options.c  (option subsystem walks these at startup):
++ *       ra_ctx_conf, gl_video_conf, gl_next_conf, spirv_conf
++ *       — reproduced as EMPTY but valid m_sub_options. No staying TU reads
++ *         the corresponding option substructs, so the option groups can be
++ *         empty; the only effect is that the --gpu-*, --icc-*, etc. options
++ *         no longer exist, which is correct with no GPU renderer.
++ *
++ *   filters/f_lavfi.c  (audio lavfi filter graph, stays compiled):
++ *       ra_hwdec_driver_get_imgfmt_for_name
++ *       ra_hwdec_driver_get_device_type_for_name
++ *       ra_hwdec_validate_drivers_only_opt
++ *       — report "no hwdec interop"; the audio-only build has no hwdec.
++ *
++ * This file is part of mpv.
++ *
++ * mpv is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * mpv is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <stdbool.h>
++
++#include <libavutil/hwcontext.h>
++
++#include "config.h"
++#include "options/m_option.h"
++#include "video/img_format.h"
++#include "video/out/gpu/hwdec.h"
++
++/* ---- option groups (empty but valid) -----------------------------------
++ *
++ * options/options.c references these four via OPT_SUBSTRUCT. The option
++ * subsystem requires a valid m_sub_options: a non-NULL, {0}-terminated
++ * opts array and a size. An empty opts array means the group registers no
++ * options. The matching MPOpts substruct fields are never dereferenced by
++ * any staying TU, so a 1-int placeholder backing struct is sufficient. */
++
++struct mak_empty_opts { int unused; };
++
++#define OPT_BASE_STRUCT struct mak_empty_opts
++
++const struct m_sub_options ra_ctx_conf = {
++    .opts = (const struct m_option[]){ {0} },
++    .size = sizeof(struct mak_empty_opts),
++};
++
++const struct m_sub_options gl_video_conf = {
++    .opts = (const struct m_option[]){ {0} },
++    .size = sizeof(struct mak_empty_opts),
++};
++
++const struct m_sub_options gl_next_conf = {
++    .opts = (const struct m_option[]){ {0} },
++    .size = sizeof(struct mak_empty_opts),
++};
++
++const struct m_sub_options spirv_conf = {
++    .opts = (const struct m_option[]){ {0} },
++    .size = sizeof(struct mak_empty_opts),
++};
++
++/* ---- ra_hwdec helpers referenced by filters/f_lavfi.c ------------------
++ *
++ * Signatures copied from video/out/gpu/hwdec.h / hwdec.c. With no GPU
++ * hwdec interop these report "unknown / none"; f_lavfi then loads no hwdec
++ * device, which is correct for an audio-only build. */
++
++int ra_hwdec_driver_get_imgfmt_for_name(const char *name)
++{
++    (void)name;
++    return IMGFMT_NONE;
++}
++
++enum AVHWDeviceType ra_hwdec_driver_get_device_type_for_name(const char *name)
++{
++    (void)name;
++    return AV_HWDEVICE_TYPE_NONE;
++}
++
++/* Declared in hwdec.h via OPT_STRING_VALIDATE_FUNC(); that macro also emits
++ * the static-inline `_str` trampoline that f_lavfi's OPT_STRING_VALIDATE
++ * references, so here we only need to define the non-inline target. Accept
++ * any value (there are no drivers to validate against). */
++int ra_hwdec_validate_drivers_only_opt(struct mp_log *log,
++                                       const m_option_t *opt,
++                                       struct bstr name, const char **value)
++{
++    (void)log; (void)opt; (void)name; (void)value;
++    return 1;
++}
+diff --git a/video/out/vo.c b/video/out/vo.c
+index c9cde30..df388e9 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -50,12 +50,8 @@ extern const struct vo_driver video_out_mediacodec_embed;
+ extern const struct vo_driver video_out_x11;
+ extern const struct vo_driver video_out_vdpau;
+ extern const struct vo_driver video_out_xv;
+-extern const struct vo_driver video_out_gpu;
+-extern const struct vo_driver video_out_gpu_next;
+ extern const struct vo_driver video_out_libmpv;
+ extern const struct vo_driver video_out_null;
+-extern const struct vo_driver video_out_image;
+-extern const struct vo_driver video_out_lavc;
+ extern const struct vo_driver video_out_caca;
+ extern const struct vo_driver video_out_drm;
+ extern const struct vo_driver video_out_direct3d;
+@@ -63,15 +59,11 @@ extern const struct vo_driver video_out_sdl;
+ extern const struct vo_driver video_out_vaapi;
+ extern const struct vo_driver video_out_dmabuf_wayland;
+ extern const struct vo_driver video_out_wlshm;
+-extern const struct vo_driver video_out_tct;
+ extern const struct vo_driver video_out_sixel;
+-extern const struct vo_driver video_out_kitty;
+ 
+ static const struct vo_driver *const video_out_drivers[] =
+ {
+     // high-quality and well-supported VOs first:
+-    &video_out_gpu_next,
+-    &video_out_gpu,
+ 
+ #if HAVE_VDPAU
+     &video_out_vdpau,
+@@ -104,8 +96,6 @@ static const struct vo_driver *const video_out_drivers[] =
+     &video_out_null,
+ 
+     // should not be auto-selected
+-    &video_out_image,
+-    &video_out_tct,
+ #if HAVE_CACA
+     &video_out_caca,
+ #endif
+@@ -115,8 +105,6 @@ static const struct vo_driver *const video_out_drivers[] =
+ #if HAVE_SIXEL
+     &video_out_sixel,
+ #endif
+-    &video_out_kitty,
+-    &video_out_lavc,
+ };
+ 
+ struct vo_internal {
+diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
+index a91016d..eedc5ce 100644
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -112,7 +112,7 @@ struct mpv_render_context {
+ };
+ 
+ const struct render_backend_fns *render_backends[] = {
+-    &render_backend_gpu,
++    /* RN_MEDIA_STRIP_DEAD_V1: &render_backend_gpu removed (GPU stack stripped). */
+     &render_backend_sw,
+     NULL
+ };

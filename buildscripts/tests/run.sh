@@ -47,7 +47,17 @@ echo "==> building native libmpv"
 if [ ! -f $BUILD/build.ninja ]; then
     # Both directories, in that order: we are not standing in mpv's source
     # tree, and with a single argument meson would read it as the SOURCE dir.
+    # --auto-features=disabled is load-bearing since 007 (the dead-subsystem
+    # strip). This host build used to name only the options the Android build
+    # names, and left every OTHER mpv feature at `auto` — which on a Linux dev
+    # box RESOLVES: vaapi, drm, wayland, x11 and their hwdec interops all built
+    # themselves in, and those TUs reference the GPU/render symbols 007 removes
+    # (ra_pl_get, ra_hwdec_mapper_map, mppl_wrap_tex, ...). The link then fails
+    # here and only here, on a build that is not the one we ship. Disabling
+    # auto features makes the host build mirror the shipped one: everything is
+    # off unless this list turns it on.
     meson setup $BUILD deps/mpv \
+        --auto-features=disabled \
         -Dlibmpv=true \
         -Dcplayer=false \
         -Dgpl=false \
