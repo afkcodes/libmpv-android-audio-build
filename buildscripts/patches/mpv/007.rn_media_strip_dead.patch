@@ -112,11 +112,16 @@ WHAT IS NOT TOUCHED
     alias tables, static zlib, and 16 KB page alignment.
 
 RISKS (see the experiment report for the full list)
-    * screenshot-raw becomes a no-op instead of an error. A client that
-      used it to pull cover art would get an empty result rather than a
-      failure. rn-media does not call it (grepped: packages/player has no
-      screenshot reference at all), but it is a real API-behaviour change
-      and the reason this patch is not a pure "dead code" removal.
+    * screenshot-raw becomes a no-op instead of an error. MEASURED on a
+      Poco F4 / Android 16 by running tests/device/run.sh against this .so
+      and against the unpatched one: the ONLY behavioural difference across
+      50 on-device checks is that `screenshot`, `screenshot-to-file` and
+      `screenshot-raw` return 0 here and -12 (MPV_ERROR_COMMAND) on the
+      baseline. Note what that means: they were ALREADY FAILING before this
+      patch, because vid=no/vo=null leaves no frame to capture. The change
+      is the failure mode, not the capability. rn-media does not call them
+      (grepped: packages/player has no screenshot reference at all), but a
+      caller that checks the return value would stop seeing the error.
     * DT_NEEDED loses libdl.so, because dl_iterate_phdr — the C++ unwinder's
       only libdl reference, pulled in by the libplacebo C++ TUs — is gone
       with them. A shrink, not a gain; asserted as a subset, not equality.
