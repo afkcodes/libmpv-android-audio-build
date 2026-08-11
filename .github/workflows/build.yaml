@@ -30,12 +30,16 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
+          # mpv 0.41's mandatory set, verbatim from its meson.build lines
+          # 21-30: the six ffmpeg libraries plus libplacebo. libass is not one
+          # of ours — patch 003 removes it.
           sudo apt-get install -y ninja-build pkg-config \
-            libavcodec-dev libavformat-dev libavutil-dev \
+            libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
             libswresample-dev libswscale-dev libplacebo-dev
           pipx install meson
           meson --version
-          pkg-config --modversion libplacebo libavcodec
+          pkg-config --modversion libavcodec libavfilter libavformat \
+            libavutil libswresample libswscale libplacebo
       - name: Run host regression tests
         run: ./buildscripts/tests/run.sh
 

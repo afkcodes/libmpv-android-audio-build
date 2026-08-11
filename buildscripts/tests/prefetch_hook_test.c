@@ -154,6 +154,9 @@ static void run_case(const char *mode, const char *file_a, const char *file_b,
         exit(1);
     }
     mpv_set_option_string(ctx, "terminal", "no");
+    // Hermetic: a developer's ~/.config/mpv/mpv.conf must not be able to change
+    // what this test measures (prefetch-playlist and the AO in particular).
+    mpv_set_option_string(ctx, "config", "no");
     mpv_set_option_string(ctx, "vid", "no");
     mpv_set_option_string(ctx, "ao", "null");
     mpv_set_option_string(ctx, "audio-display", "no");
