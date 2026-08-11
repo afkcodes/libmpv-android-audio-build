@@ -14,6 +14,31 @@ permissions:
   contents: write
 
 jobs:
+  # The mpv patches are plain C in mpv's core, so they are testable without a
+  # device. This job builds a NATIVE libmpv from the same patched sources the
+  # Android job builds, and asserts patch 006's behaviour through the public
+  # client API. Runs in parallel with the Android build.
+  #
+  # ubuntu-24.04 and not 22.04: mpv 0.41 needs libplacebo >= 6.338 (jammy has
+  # 4.192) and libavcodec >= 60.31.102. noble carries both.
+  test:
+    name: Host regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libswresample-dev libswscale-dev libplacebo-dev
+          pipx install meson
+          meson --version
+          pkg-config --modversion libplacebo libavcodec
+      - name: Run host regression tests
+        run: ./buildscripts/tests/run.sh
+
   build:
     name: Build
     runs-on: ubuntu-22.04
