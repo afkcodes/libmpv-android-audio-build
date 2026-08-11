@@ -97,10 +97,18 @@ cd - >/dev/null
 
 echo "==> cross-compiling for $ABI"
 export PATH="$PWD/$NDK:$PATH"
-$CC -O1 -Wall -Wextra -Wno-unused-parameter -I deps/mpv/include \
+# -Wl,-z,max-page-size=16384 on the TEST BINARIES, not just the library.
+# Learned the hard way on a 16 KB-page emulator (sdk_gphone16k, Android 16):
+# these harness executables are ELFs too, and a 4 KB-aligned ELF cannot be
+# loaded at all on a 16 KB-page system. Without this flag the test segfaults
+# before main() and looks exactly like an engine crash — it is not, it is the
+# harness failing to load. The engine already carries the flag from
+# build.sh's LDFLAGS; the harness has to carry it for the same reason.
+ALIGN="-Wl,-z,max-page-size=16384"
+$CC -O1 -Wall -Wextra -Wno-unused-parameter $ALIGN -I deps/mpv/include \
     -o "$WORK/engine_test" tests/device/engine_test.c \
     -L "$(dirname "$LIBMPV")" -lmpv
-$CC -O2 -Wall -I deps/mpv/include \
+$CC -O2 -Wall $ALIGN -I deps/mpv/include \
     -o "$WORK/perf_test" tests/device/perf_test.c \
     -L "$(dirname "$LIBMPV")" -lmpv
 
