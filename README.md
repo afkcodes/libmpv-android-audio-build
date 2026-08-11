@@ -15,7 +15,7 @@ work lives on the **`rn-media-hls`** branch; releases are tagged
 | NDK | 27.1.12297006 |
 | Licence | LGPLv3. No `--enable-gpl`, no `--enable-nonfree`, no new external library. |
 
-Four deltas versus upstream, in the order they were added:
+Five deltas versus upstream, in the order they were added:
 
 1. **HLS.** `--enable-demuxer=hls --enable-demuxer=mpegts`. Upstream's audio
    flavour builds FFmpeg with `--disable-demuxers` plus an allow-list holding
@@ -33,6 +33,21 @@ Four deltas versus upstream, in the order they were added:
    `pcm-tap-frame`, behind rn-media's audio visualizer. No new exported symbol.
 4. **libass removed** (`patches/mpv/003`). mpv has no build switch for it and
    an audio-only build renders no glyphs.
+5. **A prefetch hook** (`patches/mpv/006`) — one new client hook,
+   `on_prefetch_load`, and a read-only `prefetch-playlist-entry-id` property.
+   `--prefetch-playlist` opens the next entry's *raw* filename: `prefetch_next()`
+   calls `start_open()` directly and never reaches the hook pipeline, so a client
+   that resolves URLs in `on_load` never sees the prefetched entry — and the
+   prefetch is discarded at the boundary anyway, because mpv compares the
+   prefetched URL against the post-`on_load` one byte-for-byte. Upstream states
+   this is permanent ("This does not work with URLs resolved by the `youtube-dl`
+   wrapper, and it won't" — `DOCS/man/options.rst`), so gapless network queues
+   and resolved/expiring URLs are mutually exclusive without a patch. With it, a
+   resolver rewrites the next URL at prefetch time and the prefetched demuxer is
+   actually reused. No new exported symbol: hooks ride the existing
+   `mpv_hook_add`/`mpv_hook_continue`. The patch header carries the full
+   reasoning, including the five places it deliberately diverges from the prior
+   art it is based on.
 
 ## Building
 
@@ -45,6 +60,26 @@ cd buildscripts
 `rn-media-release.sh` refuses to package a `.so` that does not contain a string
 only the patched code emits. Verify capabilities in the **shipped artifact**,
 never in the build log.
+
+## Testing
+
+```sh
+buildscripts/tests/run.sh    # ~15 s once libmpv is built; no device, no emulator
+```
+
+The patches under `patches/mpv` are plain C in mpv's core, so they are testable
+on the host. `tests/run.sh` re-applies the patch series from pristine, builds a
+**native** libmpv from those same sources, and runs `tests/prefetch_hook_test.c`
+against it through the public client API — 21 assertions covering patch 006's
+three cases (no client registered, a client that continues unchanged, a client
+that rewrites the URL), its re-entry guard, and the fact that the playing
+track's own state is left alone while the hook is open. It is a real regression
+test: removing the guard makes it fail rather than hang.
+
+It needs meson >= 1.3 (mpv 0.41's floor), ninja, pkg-config and dev packages for
+ffmpeg and libplacebo >= 6.338. It only ever adds `deps/mpv/_build-linux`; the
+Android build directories and `prefix/` are untouched. CI runs it on every push
+as the `Host regression tests` job, in parallel with the Android build.
 
 ## Notes for the next engine bump
 
