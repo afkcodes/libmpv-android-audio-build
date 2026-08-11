@@ -71,9 +71,10 @@ WHAT IT ADDS
 
                     While it is open, `stream-open-filename` reads the
                     prefetched entry's URL and may be WRITTEN to resolve it.
-                    Everything else — `path`, `duration`, `playlist-current-pos`,
-                    every demuxer-derived property — still describes the
-                    CURRENTLY PLAYING track, which is still playing.
+                    Everything else — `path`, `duration`, every
+                    demuxer-derived property, `playlist-current-pos` — still
+                    describes the CURRENTLY PLAYING track, which is still
+                    playing.
 
     `prefetch-playlist-entry-id`
                     int64, read-only.  playlist_entry.id of the entry being
@@ -182,12 +183,13 @@ WHAT WE DO DIFFERENTLY (and why)
        a URL (a relative local path comes back absolute).
 
     5. Nothing reads the playlist entry after the hook.
-       url, stream_flags and id are snapshotted BEFORE process_hooks(), and
-       the entry pointer is nulled at that point.  The prior art reads new_entry->stream_flags
-       AFTER the hook has returned; a client that runs playlist-remove while
-       the hook is open frees that entry (common/playlist.c: playlist_remove()
-       -> playlist_entry_unref(), which deallocates at reserved == 0), so that
-       read is a use-after-free reachable from the client API.
+       url, stream_flags and id are snapshotted BEFORE process_hooks(), and the
+       entry pointer is nulled at that point.  The prior art reads
+       new_entry->stream_flags AFTER the hook has returned; a client that runs
+       playlist-remove while the hook is open frees that entry
+       (common/playlist.c: playlist_remove() -> playlist_entry_unref(), which
+       deallocates at reserved == 0), so that read is a use-after-free
+       reachable from the client API.
        We also re-check mpctx->stop_play and mpctx->open_active after the
        hook, since the core kept servicing commands throughout.
 
@@ -197,6 +199,18 @@ WHAT WE DO DIFFERENTLY (and why)
     actually changed; notifying would leave every observer of that property
     holding the prefetch URL permanently, because the restore is a plain
     assignment (and so is play_current_file()'s own at loadfile.c:1686).
+
+REGRESSION TEST
+    tests/prefetch_hook_test.c, driven by tests/run.sh.  It builds a NATIVE
+    libmpv from these same patched sources and asserts all three cases — no
+    client registered, a client that continues unchanged, a client that
+    rewrites — plus the re-entry guard and the absence of a property-change
+    notification for the prefetch-time write.  Device-free, ~15 s.  It is a
+    real regression test and not a demo: delete the `in_prefetch_hook` early
+    return and the run FAILS in about 3 seconds with 9 failed assertions,
+    "exactly one on_prefetch_load" first among them.  (The harness caps the
+    runaway at 21 invocations and stops; an uncapped one reached 138 nested
+    invocations of the hook for a single entry within one 25 s window.)
 
 REBASING
     Four files, no build-system files.  The anchors to re-check after a
@@ -214,9 +228,10 @@ REBASING
       player/core.h       struct MPContext, the block around
                           `char *stream_open_filename;`.
       player/command.c    mp_hook_start()'s body (mp_hook_exists() goes
-                          immediately after it), mp_property_stream_open_filename()'s
-                          M_PROPERTY_SET arm, and the {"stream-open-filename", ...}
-                          property-table row, which the new row follows.
+                          immediately after it), the M_PROPERTY_SET arm of
+                          mp_property_stream_open_filename(), and the
+                          {"stream-open-filename", ...} property-table row,
+                          which the new row follows.
       player/command.h    the mp_hook_* declaration block.
     Independent of patch 004 (audio/out/*, common/global.h, and command.c's
     AUDIO property region ~1900 and the {"audio-out-params", ...} row) and of
