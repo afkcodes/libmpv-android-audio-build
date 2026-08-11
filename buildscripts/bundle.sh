@@ -13,10 +13,14 @@ fi
 
 zip -r debug-symbols-default.zip prefix/*/lib
 
-./sdk/android-sdk-linux/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all prefix/arm64-v8a/usr/local/lib/libmpv.so
-./sdk/android-sdk-linux/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all prefix/armeabi-v7a/usr/local/lib/libmpv.so
-./sdk/android-sdk-linux/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all prefix/x86/usr/local/lib/libmpv.so
-./sdk/android-sdk-linux/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all prefix/x86_64/usr/local/lib/libmpv.so
+# The NDK version is pinned in ONE place, include/depinfo.sh. It used to be
+# written out again in each strip path below, so a bump silently left this
+# script pointing at an NDK that download-sdk.sh no longer installs.
+. ./include/depinfo.sh
+STRIP=./sdk/android-sdk-linux/ndk/$v_ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+  $STRIP --strip-all prefix/$abi/usr/local/lib/libmpv.so
+done
 
 # --------------------------------------------------
 
