@@ -71,7 +71,18 @@ unset CC CXX
 # `-Wl,-z,max-page-size=16384` lives. Dropping it would silently ship a 4 KB
 # aligned .so that fails to load on 16 KB-page Android devices, which is a
 # runtime crash on new hardware and invisible in every build log.
-ldflags="$LDFLAGS -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
+# libiconv is the one dependency here with NO pkg-config file, so meson's
+# dependency('iconv') cannot find it the way it finds ffmpeg and libplacebo
+# (PKG_CONFIG_LIBDIR, set in include/path.sh). It falls back to a header check
+# plus cc.find_library('iconv'), and neither searches our prefix -- build.sh's
+# LDFLAGS carries only link-behaviour flags and CFLAGS is unset. So the prefix
+# has to be named explicitly here, or -Diconv=enabled fails meson outright with
+# "iconv was not found!".
+#
+# --exclude-libs=ALL below still applies: libiconv is linked statically and its
+# symbols stay out of .dynsym, so this adds a capability and not an export.
+iconv_cflags="-I$prefix_dir/include"
+ldflags="$LDFLAGS -L$prefix_dir/lib -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
 
 # EXHAUSTIVE OPTION LIST (rn-media parity release, #32).
 #
@@ -94,6 +105,8 @@ ldflags="$LDFLAGS -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	--default-library shared \
 	-Dprefer_static=true \
+	-Dc_args="$iconv_cflags" \
+	-Dcpp_args="$iconv_cflags" \
 	-Dc_link_args="$ldflags" \
 	-Dcpp_link_args="$ldflags" \
 	\
