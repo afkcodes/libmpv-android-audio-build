@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+      # rn-media's working branch. The build has to be verifiable BEFORE it is
+      # merged or tagged; the release step below is still gated on main, so a
+      # run from here produces artifacts and nothing else.
+      - rn-media-hls
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,6 +27,28 @@ jobs:
           java-version: 17
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+      # mpv is meson-only since 0.37 and libplacebo has always been meson, so
+      # this repo stopped building with the runner image's stock toolchain at
+      # the 0.41 bump. mpv 0.41's meson.build says meson_version: '>=1.3.0';
+      # ubuntu-22.04's apt meson is 0.61.2, hence pipx rather than apt for that
+      # one. nasm is ffmpeg's x86/x86_64 assembler.
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build nasm pkg-config
+          pipx install meson
+          meson --version && ninja --version && nasm -v
+      # The NDK is pinned in depinfo.sh and hardcoded into bundle.sh's strip
+      # path; the runner image only happens to carry some NDK. Read the pin
+      # rather than trusting the image, and install it if it is missing.
+      - name: Install pinned NDK
+        run: |
+          v_ndk=$(sed -n 's/^v_ndk=//p' buildscripts/include/depinfo.sh)
+          echo "pinned NDK: $v_ndk"
+          if [ ! -d "$ANDROID_HOME/ndk/$v_ndk" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$v_ndk"
+          fi
+          ls "$ANDROID_HOME/ndk/$v_ndk/toolchains/llvm/prebuilt"
       - name: Symlink SDK
         working-directory: ./buildscripts
         run: |
