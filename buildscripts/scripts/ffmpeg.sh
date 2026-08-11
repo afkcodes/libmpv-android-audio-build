@@ -159,6 +159,33 @@ cpuflags=
 # Deleting them is a separate, cosmetic change.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# rn-media parity release (#32)
+#
+# ITEM 8 -- zlib. `--enable-zlib` is NEW here and was darwin-only before. zlib in
+# libavformat is what decompresses Matroska COMPRESSED TRACK HEADERS, so a .mka
+# using header compression was a candidate for playing on iOS and failing on
+# Android. It costs nothing: the NDK sysroot ships zlib.h and libz.so at API 21,
+# so this adds one DT_NEEDED (libz.so) and no vendored source.
+#
+# DEAD FLAGS REMOVED -- three entries that matched NOTHING in FFmpeg 8.1.2, each
+# of which configure warned about on every single build:
+#
+#   --enable-decoder=ljpeg   ljpeg is an ENCODER only; there has never been an
+#                            ljpeg decoder (mjpeg decodes it). The ENCODER flag
+#                            below is real and stays.
+#   --enable-protocol=hls    FFmpeg 8.x deleted the deprecated `hls://`
+#                            protocol. HLS is carried by the DEMUXER, which is
+#                            why it kept working.
+#   --enable-protocol=srt    needs external libsrt, which is not linked.
+#
+# They were previously kept "so the diff stays about the version bump". The
+# version bump is long done, and the darwin fork was about to have them copied
+# into it wholesale for cover-art parity -- so they are being deleted on both
+# forks in this release instead of propagated. What is enabled here should be
+# what actually exists.
+# ---------------------------------------------------------------------------
+
 ../configure \
 	--target-os=android --enable-cross-compile --cross-prefix=$ndk_triple- --ar=$AR --cc=$CC --ranlib=$RANLIB \
 	--arch=${ndk_triple%%-*} --cpu=$cpu --pkg-config=pkg-config --nm=llvm-nm \
@@ -205,6 +232,8 @@ cpuflags=
 	\
 	--enable-mbedtls \
 	\
+	--enable-zlib \
+	\
 	--enable-libxml2 \
 	\
 	--enable-avutil \
@@ -242,7 +271,6 @@ cpuflags=
 	--enable-decoder=truehd \
 	\
 	--enable-decoder=mjpeg \
-	--enable-decoder=ljpeg \
 	--enable-decoder=jpegls \
 	--enable-decoder=jpeg2000 \
 	--enable-decoder=png \
@@ -321,7 +349,6 @@ cpuflags=
 	--enable-protocol=ffrtmphttp \
 	--enable-protocol=file \
 	--enable-protocol=ftp \
-	--enable-protocol=hls \
 	--enable-protocol=http \
 	--enable-protocol=httpproxy \
 	--enable-protocol=https \
@@ -334,7 +361,6 @@ cpuflags=
 	--enable-protocol=subfile \
 	--enable-protocol=tcp \
 	--enable-protocol=tls \
-	--enable-protocol=srt \
 	\
 	--enable-encoder=mjpeg \
 	--enable-encoder=ljpeg \

@@ -6,8 +6,23 @@ v_sdk=11076708_latest
 v_ndk=27.1.12297006
 v_sdk_build_tools=35.0.0
 
-v_mbedtls=3.6.1
-v_libxml2=2.10.3
+# rn-media parity release (#32), item 3: 3.6.1 -> 3.6.7, the current 3.6 LTS
+# point release (2026-07-07, resolved from the Mbed-TLS releases API). The
+# darwin fork moves 3.4.1 -> 3.6.7 in the same release, so both platforms
+# terminate TLS with the same library for the first time.
+v_mbedtls=3.6.7
+# rn-media parity release (#32), item 4: 2.10.3 -> 2.15.3, matching the darwin
+# fork, which moves 2.11.5 -> 2.15.3. The two forks were a release line apart in
+# opposite directions and neither number had been decided. 2.15.3 still ships
+# autotools, which this fork's libxml2.sh needs -- checked against the tree.
+#
+# NOTE, and it should be acted on separately: this fork passes --enable-libxml2
+# to FFmpeg on EVERY build, but libxml2 in libavformat serves only the DASH
+# demuxer, and this fork does not enable that demuxer. So the shipped audio
+# artifact links an XML parser nothing can reach. Dropping it would shrink the
+# binary and remove attack surface; it is not folded in here because it changes
+# what ships rather than aligning it.
+v_libxml2=2.15.3
 # FFmpeg 8.1.2 ("Hoare" line, 2026-06-17). The floor is mpv 0.41's own
 # `dependency('libavcodec', version: '>= 60.31.102')` (meson.build:21), i.e.
 # FFmpeg >= 6.1. Deliberately NOT n9.0: that branch was cut 2026-06-26, six

@@ -259,7 +259,7 @@ WORKSHOP
 diff --git a/player/loadfile.c b/player/loadfile.c
 --- a/player/loadfile.c
 +++ b/player/loadfile.c
-@@ -1278,11 +1278,93 @@
+@@ -1278,11 +1278,93 @@ void prefetch_next(struct MPContext *mpctx)
      if (!mpctx->opts->prefetch_open || mpctx->open_active)
          return;
  
@@ -359,7 +359,7 @@ diff --git a/player/loadfile.c b/player/loadfile.c
 diff --git a/player/core.h b/player/core.h
 --- a/player/core.h
 +++ b/player/core.h
-@@ -280,6 +280,23 @@
+@@ -280,6 +280,23 @@ typedef struct MPContext {
      struct playlist_entry *playing; // currently playing file
      char *filename; // immutable copy of playing->filename (or NULL)
      char *stream_open_filename;
@@ -386,7 +386,7 @@ diff --git a/player/core.h b/player/core.h
 diff --git a/player/command.c b/player/command.c
 --- a/player/command.c
 +++ b/player/command.c
-@@ -262,6 +262,21 @@
+@@ -261,6 +261,21 @@ void mp_hook_start(struct MPContext *mpctx, char *type)
      run_next_hook_handler(mpctx, type, 0);
  }
  
@@ -408,7 +408,7 @@ diff --git a/player/command.c b/player/command.c
  int mp_hook_continue(struct MPContext *mpctx, int64_t client_id, uint64_t id)
  {
      struct command_ctx *cmd = mpctx->command_ctx;
-@@ -553,11 +568,30 @@
+@@ -552,11 +567,30 @@ static int mp_property_stream_open_filename(void *ctx, struct m_property *prop,
          return M_PROPERTY_UNAVAILABLE;
      switch (action) {
      case M_PROPERTY_SET: {
@@ -441,7 +441,7 @@ diff --git a/player/command.c b/player/command.c
          return M_PROPERTY_OK;
      }
      case M_PROPERTY_GET_TYPE:
-@@ -571,6 +605,24 @@
+@@ -570,6 +604,24 @@ static int mp_property_stream_open_filename(void *ctx, struct m_property *prop,
      return M_PROPERTY_NOT_IMPLEMENTED;
  }
  
@@ -466,7 +466,7 @@ diff --git a/player/command.c b/player/command.c
  static int mp_property_file_size(void *ctx, struct m_property *prop,
                                   int action, void *arg)
  {
-@@ -4424,6 +4476,7 @@
+@@ -4354,6 +4406,7 @@ static const struct m_property mp_properties_base[] = {
      {"display-sync-active", mp_property_display_sync_active},
      {"filename", mp_property_filename},
      {"stream-open-filename", mp_property_stream_open_filename},
@@ -477,7 +477,7 @@ diff --git a/player/command.c b/player/command.c
 diff --git a/player/command.h b/player/command.h
 --- a/player/command.h
 +++ b/player/command.h
-@@ -120,6 +120,9 @@
+@@ -120,6 +120,9 @@ enum {
  
  bool mp_hook_test_completion(struct MPContext *mpctx, char *type);
  void mp_hook_start(struct MPContext *mpctx, char *type);
