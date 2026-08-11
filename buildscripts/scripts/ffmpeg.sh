@@ -179,8 +179,18 @@ cpuflags=
 # ITEM 8 -- zlib. `--enable-zlib` is NEW here and was darwin-only before. zlib in
 # libavformat is what decompresses Matroska COMPRESSED TRACK HEADERS, so a .mka
 # using header compression was a candidate for playing on iOS and failing on
-# Android. It costs nothing: the NDK sysroot ships zlib.h and libz.so at API 21,
-# so this adds one DT_NEEDED (libz.so) and no vendored source.
+# Android.
+#
+# CORRECTED 2026-08-12 (rn-media #30): this used to say "adds one DT_NEEDED
+# (libz.so)". That is wrong about the artifact we actually ship. The NDK sysroot
+# carries a STATIC libz.a beside libz.so, and scripts/mpv.sh passes
+# -Dprefer_static=true, so meson resolves -lz to the ARCHIVE and zlib is linked
+# INTO libmpv.so. Measured on the shipped .so rather than reasoned about:
+# DT_NEEDED is exactly libm/libandroid/libdl/libc with no libz entry, and
+# `llvm-nm` finds inflate/inflateInit2_/inflate_fast as local text symbols
+# (hidden from .dynsym by --exclude-libs=ALL, like every other static input).
+# Still free in the sense that mattered -- no vendored source, no new file to
+# ship -- but it is ~90 KB of .text, not a shared-library reference.
 #
 # DEAD FLAGS REMOVED -- three entries that matched NOTHING in FFmpeg 8.1.2, each
 # of which configure warned about on every single build:
