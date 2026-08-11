@@ -87,6 +87,39 @@ jobs:
         working-directory: ./buildscripts
         run: |
           ./bundle.sh
+      # An independent, workflow-level check that the engine actually built.
+      #
+      # bundle.sh asserts the same thing, and this deliberately duplicates it:
+      # the failure being guarded against is a build script that silently stops
+      # producing libmpv.so, and a guard that lives only inside that same script
+      # is one edit away from going with it. This one also catches the shape the
+      # artifact SIZE would have shown -- four green runs uploaded 480 KB of
+      # helper library where a real build uploads ~15 MB, and nothing looked.
+      - name: Assert the engine is actually in the jars
+        run: |
+          cd buildscripts/deps/media-kit-android-helper/app/build/outputs/apk/release
+          total=0
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            jar="default-$abi.jar"
+            if [ ! -f "$jar" ]; then
+              echo "::error::$jar was not produced"; exit 1
+            fi
+            if ! unzip -l "$jar" | grep -q "lib/$abi/libmpv.so"; then
+              echo "::error::$jar contains no lib/$abi/libmpv.so -- the engine did not build"
+              unzip -l "$jar"; exit 1
+            fi
+            size=$(stat -c%s "$jar")
+            total=$((total + size))
+            echo "$jar: $size bytes"
+            # A real stripped libmpv.so compresses to ~3.5-4 MB per ABI. The
+            # empty-jar failure mode produced ~120 KB, so 2 MB separates them
+            # with a wide margin either way.
+            if [ "$size" -lt 2000000 ]; then
+              echo "::error::$jar is only $size bytes; a real build is >2 MB"; exit 1
+            fi
+          done
+          echo "All four jars carry libmpv.so; total $total bytes."
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:

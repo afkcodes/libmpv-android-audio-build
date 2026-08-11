@@ -82,25 +82,31 @@ unset CC CXX
 # --exclude-libs=ALL below still applies: libiconv is linked statically and its
 # symbols stay out of .dynsym, so this adds a capability and not an export.
 iconv_cflags="-I$prefix_dir/include"
-# ...and LIBRARY_PATH, which is the part that actually makes meson find it.
+# ...and libiconv is handed to the linker EXPLICITLY, which is the part that
+# actually makes mpv's dependency('iconv') resolve.
 #
-# -L alone is not enough. mpv asks for iconv with dependency('iconv'), and with
-# -Dprefer_static=true meson's find_library does not run a `-liconv` link test:
-# it SEARCHES the compiler's own library directories for libiconv.a. Those come
-# from `clang -print-search-dirs`, which -L does not contribute to and
-# LIBRARY_PATH does. Without this, meson reports
-#   Run-time dependency iconv found: NO (tried builtin and system)
-# even with libiconv.a sitting in $prefix_dir/lib and -L pointing at it.
+# Two facts about that check, both established by reproducing it locally rather
+# than by guessing (the first guess, LIBRARY_PATH, was wrong -- clang's
+# -print-search-dirs does not read it):
 #
-# The builtin half of that check can never pass here regardless: GNU libiconv's
-# header macro-renames iconv_open to libiconv_open, so meson's probe fails to
-# link against bionic and falls through to the system half, which is the one
-# this fixes.
+#   * meson tries a BUILTIN check first: it compiles `iconv_open("","")` and
+#     links it. GNU libiconv's header macro-renames that to libiconv_open, so
+#     the probe needs the archive on the link line or it dies with
+#     "undefined symbol: libiconv_open". -L alone does not put it there.
+#   * meson's SYSTEM fallback cannot rescue it here either: with
+#     -Dprefer_static=true, find_library stops doing a `-liconv` link test and
+#     instead SEARCHES the compiler's own library directories, which come from
+#     -print-search-dirs and never include our prefix.
 #
-# build.sh's loadarch() unsets LIBRARY_PATH for every arch, so this is set here,
-# per-arch, and does not leak between them.
-export LIBRARY_PATH="$prefix_dir/lib"
-ldflags="$LDFLAGS -L$prefix_dir/lib -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
+# So the archive is named directly. -Wl, form on purpose: meson hoists bare -L
+# flags to the front of the command but leaves -Wl, args at the end, after the
+# object files -- which is the only order in which a static archive resolves
+# anything. With this, the builtin check links and iconv is found.
+#
+# --exclude-libs=ALL below still applies to it, so libiconv's symbols stay out
+# of .dynsym: this adds a capability, not an export.
+iconv_ldflags="-L$prefix_dir/lib -Wl,-l:libiconv.a"
+ldflags="$LDFLAGS $iconv_ldflags -Wl,--exclude-libs=ALL -Wl,--version-script=$PWD/../../include/mpv.ver"
 
 # EXHAUSTIVE OPTION LIST (rn-media parity release, #32).
 #
